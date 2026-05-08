@@ -99,6 +99,33 @@ pub struct RouteDecorator {
 #[pymethods]
 impl RouteDecorator {
     fn __call__(&self, py: Python<'_>, func: PyObject) -> PyResult<PyObject> {
+        // Phase K: registration-time validation — when status_code is in the
+        // no-content range (204/304/1xx), the handler must declare a None
+        // return annotation. Catches "@app.get(..., status_code=204) -> dict"
+        // misconfiguration at decoration time, matching FastAPI behaviour.
+        if let Some(sc) = self.status_code {
+            if sc == 204 || sc == 304 || (100..200).contains(&sc) {
+                let typing = py.import_bound("typing")?;
+                let get_hints = typing.getattr("get_type_hints")?;
+                if let Ok(hints) = get_hints.call1((func.bind(py),)) {
+                    if let Ok(Some(ret_ann)) = hints.downcast::<PyDict>()
+                        .map(|d| d.get_item("return").ok().flatten())
+                    {
+                        let is_none_type = ret_ann.is_none()
+                            || ret_ann.eq(py.None().into_bound(py))?
+                            || ret_ann.repr().map(|r| {
+                                let s = r.to_string();
+                                s == "<class 'NoneType'>" || s == "None"
+                            }).unwrap_or(false);
+                        if !is_none_type {
+                            return Err(pyo3::exceptions::PyAssertionError::new_err(
+                                format!("Status code {} must not have a non-None return annotation", sc),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         let plan = compile_route_plan(py, &func, &self.path).unwrap_or_default();
         let security = extract_route_security(py, &plan, &self.dependencies).unwrap_or_default();
         self.routes.lock().push(Route {
@@ -760,6 +787,32 @@ impl FastAPI {
                     route_deps_markers = r.dependencies.iter().map(|p| p.clone_ref(py)).collect::<Vec<_>>();
                 }
                 None => {
+                    // Phase K: redirect_slashes (Starlette default) — try the
+                    // path with the opposite trailing-slash state. If a route
+                    // matches there, emit a 307 redirect with Location header.
+                    if path != "/" {
+                        let alt = if path.ends_with('/') {
+                            path.trim_end_matches('/').to_string()
+                        } else {
+                            format!("{}/", path)
+                        };
+                        let alt_matched = routes.iter().any(|r| {
+                            r.method == method && match_path_template(&r.path, &alt).is_some()
+                        });
+                        if alt_matched {
+                            drop(routes);
+                            // Preserve query string in the redirect.
+                            let location = match &query_string {
+                                Some(qs) if !qs.is_empty() => format!("{}?{}", alt, qs),
+                                _ => alt,
+                            };
+                            return Ok((
+                                307,
+                                vec![("location".into(), location)],
+                                Vec::new(),
+                            ));
+                        }
+                    }
                     drop(routes);
                     if path_exists {
                         return Ok((
@@ -916,6 +969,41 @@ impl FastAPI {
         let body_bytes: Vec<u8> = body
             .map(|b| b.as_bytes().to_vec())
             .unwrap_or_default();
+
+        // Phase K: when the route declares a JSON body param, reject wrong
+        // Content-Type before even attempting to validate. Matches FastAPI
+        // (fastapi/routing.py:get_request_handler) — only application/json or
+        // application/*+json are accepted; missing CT is allowed (some clients
+        // omit it). text/plain etc. → 422 with body-shape validation error.
+        let has_json_body = param_plan.iter().any(|p| {
+            let dict = match p.bind(py).downcast::<PyDict>() {
+                Ok(d) => d.clone(),
+                Err(_) => return false,
+            };
+            let s: String = dict.get_item("source").ok().flatten()
+                .and_then(|v| v.extract().ok()).unwrap_or_default();
+            if s != "body" { return false; }
+            let mt: String = dict.get_item("media_type").ok().flatten()
+                .and_then(|v| v.extract().ok()).unwrap_or_else(|| "application/json".into());
+            mt == "application/json" || mt.ends_with("+json")
+        });
+        if has_json_body && !body_bytes.is_empty() {
+            let ct: String = header_lookup
+                .get_item("content-type")?
+                .and_then(|v| v.extract::<Vec<String>>().ok())
+                .and_then(|vs| vs.into_iter().next())
+                .unwrap_or_default();
+            if !ct.is_empty() {
+                // Strip ;charset=... and similar parameters before checking.
+                let ct_main = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+                let is_json_ct = ct_main == "application/json"
+                    || (ct_main.starts_with("application/") && ct_main.ends_with("+json"));
+                if !is_json_ct {
+                    pydantic_error_dicts.push(json_invalid_dict(py, &["body".into()])?);
+                }
+            }
+        }
+
         extract_body_params(
             py,
             &param_plan,
