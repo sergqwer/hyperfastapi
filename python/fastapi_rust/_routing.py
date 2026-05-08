@@ -38,6 +38,266 @@ from uuid import UUID
 _PATH_PARAM_RE = re.compile(r"\{([^}:]+)(?::[^}]+)?\}")
 
 
+def _run_coro_blocking(coro):
+    """Run a coroutine to completion from a sync context that may itself be
+    running inside an event loop (e.g. Starlette TestClient).
+
+    `asgiref.sync.async_to_sync` raises RuntimeError if called from a thread
+    that has an active loop. The robust workaround is to spawn a fresh thread,
+    create a new event loop there, and block on it.
+
+    Phase J replaces this with a true async dispatch path through
+    applications.py.
+    """
+    import asyncio
+    import threading
+
+    holder: dict[str, Any] = {}
+
+    def runner() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+            holder["v"] = loop.run_until_complete(coro)
+        except BaseException as e:
+            holder["e"] = e
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=runner)
+    t.start()
+    t.join()
+    if "e" in holder:
+        raise holder["e"]
+    return holder["v"]
+
+
+def call_with_async_handling(callable_, kwargs):
+    """Invoke `callable_(**kwargs)` synchronously, transparently running
+    async callables via `_run_coro_blocking` so dispatch stays sync.
+
+    Generators (sync `yield` deps) yield a single value; we capture the first
+    yielded value and the generator object so the caller can drive teardown.
+    For Phase D-1 we discard the generator after first yield (no teardown);
+    Phase D-3 wires up proper LIFO cleanup.
+    """
+    import inspect as _ins
+    is_async = _ins.iscoroutinefunction(callable_) or (
+        not _ins.isclass(callable_)
+        and hasattr(callable_, "__call__")
+        and _ins.iscoroutinefunction(callable_.__call__)
+    )
+    if is_async:
+        return _run_coro_blocking(callable_(**kwargs))
+    result = callable_(**kwargs)
+    if _ins.isgenerator(result):
+        return next(result)
+    return result
+
+
+def expand_route_level_dependencies(deps_markers):
+    """Convert a `dependencies=[Depends(...), ...]` list of markers into
+    synthetic plan entries that can be appended to a route's plan. Each entry
+    has source=depends + dep_callable + dep_plan. The result is consumed by
+    resolver before the regular handler params.
+    """
+    out = []
+    for i, marker in enumerate(deps_markers):
+        dep = getattr(marker, "dependency", None)
+        if dep is None:
+            continue
+        cid = id(dep)
+        try:
+            sub_plan = compile_route_plan(dep, "")
+        except Exception:
+            sub_plan = []
+        import inspect as _ins
+        is_async = _ins.iscoroutinefunction(dep) or (
+            not _ins.isclass(dep)
+            and hasattr(dep, "__call__")
+            and _ins.iscoroutinefunction(dep.__call__)
+        )
+        out.append({
+            "name": f"_internal_dep_{i}_{cid}",
+            "source": "depends",
+            "type": "any",
+            "default": None,
+            "alias": None,
+            "required": True,
+            "validators": {},
+            "convert_underscores": True,
+            "embed": False,
+            "media_type": "application/json",
+            "dep_callable": dep,
+            "dep_plan": sub_plan,
+            "use_cache": getattr(marker, "use_cache", True) if marker is not None else True,
+            "is_async": is_async,
+            "_internal": True,
+        })
+    return out
+
+
+def resolve_dependencies(
+    plan,
+    path_params,
+    query_dict,
+    header_lookup,
+    cookie_dict,
+    form_dict,
+    body_bytes,
+    overrides,
+):
+    """Walk `plan`, resolve every Depends/Security source, return:
+        (kwargs: dict[str, Any], error: dict | None)
+
+    `kwargs` contains the values to pass to the handler. If a dependency
+    raises HTTPException, error is `{"status": int, "detail": Any, "headers": list}`.
+
+    `overrides` is `app.dependency_overrides` — a dict mapping the original
+    dep callable to its replacement.
+
+    Per-request cache: keyed by `id(callable)` after override resolution.
+    """
+    cache: dict[int, Any] = {}
+    out: dict[str, Any] = {}
+
+    def _extract_simple(entry):
+        """Extract a path/query/header/cookie/body/form value for a sub-dep."""
+        # Reuse the existing Rust extraction by routing it through Python —
+        # we replicate the small subset of cast_scalar here to avoid round-tripping.
+        name = entry["name"]
+        source = entry["source"]
+        type_kind = entry["type"]
+        alias = entry.get("alias")
+        required = entry.get("required", True)
+        convert_underscores = entry.get("convert_underscores", True)
+        validators = entry.get("validators", {}) or {}
+
+        lookup_key = alias if alias else (
+            name.replace("_", "-") if (source == "header" and convert_underscores) else name
+        )
+
+        if source == "path":
+            for n, v in path_params:
+                if n == name:
+                    return _cast(v, type_kind, source, name, validators), None
+            if required:
+                return None, _missing(source, lookup_key)
+            return _SENTINEL_DEFAULT, None
+        if source == "query":
+            vals = query_dict.get(lookup_key)
+        elif source == "header":
+            vals = header_lookup.get(lookup_key.lower())
+        elif source == "cookie":
+            v = cookie_dict.get(lookup_key)
+            vals = [v] if v is not None else None
+        elif source == "form" or source == "file":
+            vals = form_dict.get(lookup_key)
+        else:
+            vals = None
+
+        if not vals:
+            if required:
+                return None, _missing(source, lookup_key)
+            return _SENTINEL_DEFAULT, None
+
+        if type_kind.startswith("list["):
+            inner = type_kind[5:-1]
+            return [_cast(v, inner, source, name, validators) for v in vals], None
+        return _cast(vals[0], type_kind, source, name, validators), None
+
+    def _resolve_dep(entry):
+        callable_ = entry["dep_callable"]
+        # dependency_overrides lookup
+        if overrides and callable_ in overrides:
+            callable_ = overrides[callable_]
+        cid = id(callable_)
+        use_cache = entry.get("use_cache", True)
+        if use_cache and cid in cache:
+            return cache[cid], None
+
+        sub_kwargs: dict[str, Any] = {}
+        for sub_entry in entry.get("dep_plan", []):
+            if sub_entry["source"] in ("depends", "security"):
+                v, err = _resolve_dep(sub_entry)
+                if err:
+                    return None, err
+                sub_kwargs[sub_entry["name"]] = v
+            else:
+                v, err = _extract_simple(sub_entry)
+                if err:
+                    return None, err
+                if v is not _SENTINEL_DEFAULT:
+                    sub_kwargs[sub_entry["name"]] = v
+        try:
+            value = call_with_async_handling(callable_, sub_kwargs)
+        except Exception as e:
+            return None, _httpexception_dict(e)
+        if use_cache:
+            cache[cid] = value
+        return value, None
+
+    for entry in plan:
+        if entry["source"] in ("depends", "security"):
+            v, err = _resolve_dep(entry)
+            if err:
+                return out, err
+            # _internal entries (route/router/app-level dependencies=[]) don't
+            # forward their value to the handler — they only run for side
+            # effects (auth checks, etc).
+            if not entry.get("_internal"):
+                out[entry["name"]] = v
+    return out, None
+
+
+_SENTINEL_DEFAULT = object()
+
+
+def _cast(value, type_kind, source, name, validators):
+    """Tiny replica of Rust's cast_scalar — only used for sub-dep params."""
+    import re
+    if type_kind == "int":
+        return int(value)
+    if type_kind == "float":
+        return float(value)
+    if type_kind == "bool":
+        s = str(value).lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off"):
+            return False
+        return bool(value)
+    if type_kind == "uuid":
+        return UUID(str(value))
+    return value
+
+
+def _missing(source, name):
+    loc_kind = source if source in ("path", "query", "header", "cookie", "body") else "query"
+    if source in ("form", "file"):
+        loc_kind = "body"
+    return {
+        "status": 422,
+        "detail": [{
+            "type": "missing",
+            "loc": [loc_kind, name],
+            "msg": "Field required",
+            "input": "",
+        }],
+    }
+
+
+def _httpexception_dict(exc):
+    """Convert an HTTPException (or generic Exception) into the error dict
+    expected by `resolve_dependencies` callers."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        # Re-raise non-HTTP exceptions; they become 500 in the dispatch layer.
+        raise exc
+    detail = getattr(exc, "detail", str(exc))
+    headers = getattr(exc, "headers", None)
+    return {"status": status, "detail": detail, "headers": headers}
+
+
 def parse_form_body(body: bytes, content_type: str) -> dict[str, list[Any]]:
     """Parse a request body as form data. Returns dict[str, list[value]] where
     each value is a `str` (urlencoded fields, simple multipart fields) or a
@@ -313,7 +573,29 @@ def _marker_from_metadata(metadata: list[Any]) -> tuple[str | None, Any]:
     return None, None
 
 
-def compile_route_plan(handler: Any, path_template: str) -> list[dict[str, Any]]:
+def _resolve_depends_callable(default_value: Any, marker: Any, type_hint: Any) -> Any | None:
+    """Pull the dependency callable out of a Depends() marker.
+
+    Three possible forms:
+      1. `x: Annotated[T, Depends(my_func)]` — marker.dependency
+      2. `x: Annotated[T, Depends()]` — class-as-dep, callable IS T (the type
+         hint), e.g. `commons: Annotated[Commons, Depends()]` instantiates
+         Commons(...)
+      3. `x = Depends(my_func)` — default_value.dependency
+    """
+    for src in (marker, default_value):
+        if src is None:
+            continue
+        dep = getattr(src, "dependency", None)
+        if dep is not None:
+            return dep
+    # Empty Depends() with type annotation: the type IS the callable (class dep).
+    if marker is not None or default_value is not None:
+        return type_hint
+    return None
+
+
+def compile_route_plan(handler: Any, path_template: str, _seen: set[int] | None = None) -> list[dict[str, Any]]:
     """Inspect handler signature and produce a list of param plan entries.
 
     Algorithm per param:
@@ -327,7 +609,12 @@ def compile_route_plan(handler: Any, path_template: str) -> list[dict[str, Any]]
     Post-pass: if the plan contains 2+ body entries, mark each as `embed=True`
     so they're looked up under their param name in the JSON envelope. Same for
     a single body marked `Body(embed=True)`.
+
+    For Depends(): we recursively compile the dependency's plan so the dispatcher
+    has a flat graph to walk. Cycles are guarded by the `_seen` set.
     """
+    if _seen is None:
+        _seen = set()
     path_names = set(extract_path_param_names(path_template))
     plan: list[dict[str, Any]] = []
     try:
@@ -339,6 +626,23 @@ def compile_route_plan(handler: Any, path_template: str) -> list[dict[str, Any]]
         hints = get_type_hints(handler, include_extras=True)
     except Exception:
         hints = {}
+    # Class-as-dep: get_type_hints(cls) returns CLASS-level annotations only
+    # (typically {} for plain classes whose typing is on __init__). When the
+    # handler is a class and `from __future__ import annotations` stringified
+    # __init__ params, we need to resolve via __init__ explicitly.
+    if not hints and inspect.isclass(handler):
+        try:
+            hints = get_type_hints(handler.__init__, include_extras=True)
+        except Exception:
+            pass
+    # Callable instance: signature comes from __call__; resolve __call__'s hints.
+    if not hints and not inspect.isfunction(handler) and not inspect.isclass(handler):
+        call_method = getattr(handler, "__call__", None)
+        if call_method is not None:
+            try:
+                hints = get_type_hints(call_method, include_extras=True)
+            except Exception:
+                pass
 
     for name, param in sig.parameters.items():
         ann = hints.get(name, param.annotation)
@@ -432,6 +736,45 @@ def compile_route_plan(handler: Any, path_template: str) -> list[dict[str, Any]]
         }
         if model_class is not None and source in ("body", "form"):
             entry["model"] = model_class
+
+        # Phase D: Depends() / Security() — resolve the dependency callable +
+        # recursively compile its sub-plan. Use_cache controls per-request
+        # memoization at dispatch time.
+        if source in ("depends", "security"):
+            dep_callable = _resolve_depends_callable(default, meta_marker, type_for_kind)
+            if dep_callable is None:
+                # Couldn't figure out the dependency — skip; handler default kicks in.
+                continue
+            # Detect cycles by id(callable).
+            cid = id(dep_callable)
+            if cid in _seen:
+                # Cycle: leave sub_plan empty, let runtime fail explicitly.
+                entry["dep_plan"] = []
+            else:
+                _seen.add(cid)
+                try:
+                    entry["dep_plan"] = compile_route_plan(dep_callable, "", _seen)
+                except Exception:
+                    entry["dep_plan"] = []
+                _seen.discard(cid)
+            entry["dep_callable"] = dep_callable
+            # Pull use_cache from marker (defaults True). Either marker source
+            # may carry it; we prefer Annotated marker over default-as-marker.
+            uc = True
+            for src in (meta_marker, default):
+                if src is None:
+                    continue
+                v = getattr(src, "use_cache", None)
+                if v is not None:
+                    uc = bool(v)
+                    break
+            entry["use_cache"] = uc
+            # async detection
+            import inspect as _ins
+            entry["is_async"] = _ins.iscoroutinefunction(dep_callable) or (
+                hasattr(dep_callable, "__call__")
+                and _ins.iscoroutinefunction(dep_callable.__call__)
+            )
         plan.append(entry)
 
     # Post-pass: multi-body auto-embed. If 2+ body params (and not already
