@@ -142,6 +142,13 @@ def build_openapi_schema(app: Any) -> dict[str, Any]:
         info["termsOfService"] = tos
     schema["info"] = info
 
+    # When the app is mounted behind a reverse proxy via ``root_path``, OpenAPI
+    # callers need a ``servers`` entry so generated client URLs include the
+    # prefix.
+    root_path = getattr(app, "root_path", "") or ""
+    if root_path:
+        schema["servers"] = [{"url": root_path}]
+
     paths: dict[str, Any] = {}
     components_schemas: dict[str, Any] = {}
     security_schemes: dict[str, Any] = {}

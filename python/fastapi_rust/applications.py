@@ -300,6 +300,23 @@ class FastAPI(_RustFastAPI):
         # over the Rust skeleton.
         if method in ("GET", "HEAD"):
             openapi_url = self.openapi_url
+            docs_url = self.docs_url
+            redoc_url = self.redoc_url
+            # When openapi_url is None, the schema endpoint and the docs
+            # pages that depend on it must all 404 — they have no source
+            # of truth to render.
+            if openapi_url is None and path in (
+                "/openapi.json",
+                docs_url or "/docs",
+                redoc_url or "/redoc",
+            ):
+                await send({
+                    "type": "http.response.start",
+                    "status": 404,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({"type": "http.response.body", "body": b'{"detail":"Not Found"}', "more_body": False})
+                return
             if openapi_url and path == openapi_url:
                 from . import _openapi as _oa
                 schema = _oa.build_openapi_schema(self)
@@ -315,7 +332,6 @@ class FastAPI(_RustFastAPI):
                 await send({"type": "http.response.body", "body": body_bytes, "more_body": False})
                 return
             # Phase H: also serve /docs/oauth2-redirect (Swagger UI helper).
-            docs_url = self.docs_url
             if docs_url and path == f"{docs_url}/oauth2-redirect":
                 from .docs_html import OAUTH2_REDIRECT_HTML
                 body_bytes = OAUTH2_REDIRECT_HTML.encode("utf-8") if method == "GET" else b""
