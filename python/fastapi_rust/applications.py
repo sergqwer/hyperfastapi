@@ -263,6 +263,39 @@ class FastAPI(_RustFastAPI):
 
         method: str = scope["method"]
         path: str = scope["path"]
+
+        # Phase H: intercept /openapi.json before handing to Rust so the
+        # Python-built schema (with parameters/requestBody/components) wins
+        # over the Rust skeleton.
+        if method in ("GET", "HEAD"):
+            openapi_url = self.openapi_url
+            if openapi_url and path == openapi_url:
+                from . import _openapi as _oa
+                schema = _oa.build_openapi_schema(self)
+                import json as _json
+                body_bytes = _json.dumps(schema).encode("utf-8")
+                if method == "HEAD":
+                    body_bytes = b""
+                await send({
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({"type": "http.response.body", "body": body_bytes, "more_body": False})
+                return
+            # Phase H: also serve /docs/oauth2-redirect (Swagger UI helper).
+            docs_url = self.docs_url
+            if docs_url and path == f"{docs_url}/oauth2-redirect":
+                from .docs_html import OAUTH2_REDIRECT_HTML
+                body_bytes = OAUTH2_REDIRECT_HTML.encode("utf-8") if method == "GET" else b""
+                await send({
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"text/html; charset=utf-8")],
+                })
+                await send({"type": "http.response.body", "body": body_bytes, "more_body": False})
+                return
+
         query_bytes = scope.get("query_string") or b""
         query_string = (
             query_bytes.decode("latin-1")

@@ -400,6 +400,49 @@ impl FastAPI {
         None
     }
 
+    /// Phase H: emit one dict per registered HTTP route with everything the
+    /// Python OpenAPI builder needs (method, path, plan, response_model,
+    /// security entries, deprecated/tags/summary/description, status_code,
+    /// include_in_schema). WebSocket routes are skipped — Phase H doesn't
+    /// surface them in OpenAPI.
+    fn _routes_summary(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = pyo3::types::PyList::empty_bound(py);
+        for r in self.routes.lock().iter() {
+            if r.method == "WEBSOCKET" { continue; }
+            let d = PyDict::new_bound(py);
+            d.set_item("method", &r.method)?;
+            d.set_item("path", &r.path)?;
+            d.set_item("status_code", r.status_code)?;
+            d.set_item("response_model", r.response_model.as_ref().map(|p| p.clone_ref(py)))?;
+            d.set_item("response_class", r.response_class.as_ref().map(|p| p.clone_ref(py)))?;
+            d.set_item("tags", r.tags.clone())?;
+            d.set_item("deprecated", r.deprecated)?;
+            d.set_item("include_in_schema", r.include_in_schema)?;
+            d.set_item("summary", r.summary.clone())?;
+            d.set_item("description", r.description.clone())?;
+            d.set_item("response_model_exclude_unset", r.response_model_exclude_unset)?;
+            d.set_item("response_model_exclude_none", r.response_model_exclude_none)?;
+            d.set_item("response_model_exclude_defaults", r.response_model_exclude_defaults)?;
+            d.set_item("response_model_by_alias", r.response_model_by_alias)?;
+            // Plan: list of plan dicts.
+            let plan_list = pyo3::types::PyList::empty_bound(py);
+            for p in &r.param_plan { plan_list.append(p.bind(py))?; }
+            d.set_item("param_plan", plan_list)?;
+            // Security: list of dicts {scheme_name, scopes, model}.
+            let sec_list = pyo3::types::PyList::empty_bound(py);
+            for s in &r.security {
+                let sd = PyDict::new_bound(py);
+                sd.set_item("scheme_name", &s.scheme_name)?;
+                sd.set_item("scopes", s.scopes.clone())?;
+                sd.set_item("model", s.model.clone_ref(py))?;
+                sec_list.append(sd)?;
+            }
+            d.set_item("security", sec_list)?;
+            list.append(d)?;
+        }
+        Ok(list.unbind().into())
+    }
+
     /// Phase B-2 extension: alternative `_dispatch` is now in module-level dispatch
     /// but we keep the route-level fields in sync — see below.
 

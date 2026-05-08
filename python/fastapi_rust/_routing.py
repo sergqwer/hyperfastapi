@@ -529,6 +529,38 @@ def _unwrap_annotated(annotation: Any) -> tuple[Any, list[Any]]:
     return cur, metadata
 
 
+def _ann_is_optional(annotation: Any) -> bool:
+    """True if the annotation contains a top-level Optional/Union with None,
+    regardless of any wrapping ``Annotated[...]`` layers. Used to recover
+    optional-ness after ``_unwrap_annotated`` has already peeled it.
+    """
+    import typing
+    seen: set[int] = set()
+    cur = annotation
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        origin = get_origin(cur)
+        if origin is Annotated:
+            args = get_args(cur)
+            if not args:
+                return False
+            cur = args[0]
+            continue
+        is_union = origin is typing.Union
+        if not is_union:
+            try:
+                import types as _types
+                if hasattr(_types, "UnionType") and isinstance(cur, _types.UnionType):
+                    is_union = True
+            except Exception:
+                pass
+        if is_union:
+            args = get_args(cur)
+            return any(a is type(None) for a in args)
+        return False
+    return False
+
+
 def _unwrap_optional(t: Any) -> tuple[Any, bool]:
     """`Optional[T]` aka `Union[T, None]` aka `T | None` → (T, True). Else → (t, False)."""
     origin = get_origin(t)
@@ -763,9 +795,12 @@ def compile_route_plan(handler: Any, path_template: str, _seen: set[int] | None 
 
     for name, param in sig.parameters.items():
         ann = hints.get(name, param.annotation)
+        # Detect Optional/Union[None] before _unwrap_annotated peels it.
+        ann_optional = _ann_is_optional(ann)
         inner_ann, metadata = _unwrap_annotated(ann)
         # Optional -> mark required=False, peel one layer
         type_for_kind, optional = _unwrap_optional(inner_ann)
+        optional = optional or ann_optional
 
         # Phase E: SecurityScopes parameters are filled by the resolver from
         # the wrapping Security() call; they don't extract from the request.
