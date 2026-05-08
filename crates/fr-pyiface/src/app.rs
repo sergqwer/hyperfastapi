@@ -551,6 +551,16 @@ impl FastAPI {
         let extra_tags = tags.unwrap_or_default();
         let router_prefix = router.prefix.lock().clone();
         let router_tags = router.tags.lock().clone();
+        // Phase L: snapshot router-level dependencies so each child route
+        // inherits them. They run before the route's own deps and before the
+        // handler — fixes router_dependency_blocks_when_missing and
+        // router_level_dep_stacks_with_app_level.
+        let router_deps: Vec<PyObject> = router
+            .dependencies
+            .lock()
+            .iter()
+            .map(|p| p.clone_ref(py))
+            .collect();
         // Effective default_response_class for routes from this include:
         // explicit kwarg > router's default > app's default > None.
         let router_default_rc = router.default_response_class.lock().as_ref().map(|p| p.clone_ref(py));
@@ -597,7 +607,15 @@ impl FastAPI {
                 response_model_exclude_defaults: r.response_model_exclude_defaults,
                 response_model_by_alias: r.response_model_by_alias,
                 response_model_include: r.response_model_include.as_ref().map(|p| p.clone_ref(py)),
-                response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)), dependencies: r.dependencies.iter().map(|p| p.clone_ref(py)).collect(),
+                response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)), dependencies: {
+                    // Router-level deps run BEFORE the route's own — preserve
+                    // FastAPI's order (parent first). Avoids surprise where a
+                    // router-level auth check is bypassed by a route-level
+                    // dep that completes faster.
+                    let mut merged: Vec<PyObject> = router_deps.iter().map(|p| p.clone_ref(py)).collect();
+                    for p in r.dependencies.iter() { merged.push(p.clone_ref(py)); }
+                    merged
+                },
                 security: r.security.iter().map(|s| s.clone_ref(py)).collect(), operation_id: r.operation_id.clone(), responses: r.responses.as_ref().map(|p| p.clone_ref(py)), response_description: r.response_description.clone(),
             });
         }
@@ -1117,9 +1135,27 @@ impl FastAPI {
         // helper thread + new event loop so dispatch stays sync from Rust's
         // perspective. (Phase J target: lift this into a true async dispatch
         // path so we don't pay the thread-spawn cost per async request.)
+        //
+        // Phase L: yield-style deps (sync `yield` inside a Depends callable
+        // or async generators) are tracked in _bg._current_yield_gens by
+        // call_with_async_handling. We drain them here so their finally /
+        // except blocks run AFTER the handler in proper LIFO order. On
+        // handler failure, drain_yield_deps(exc) injects the exception via
+        // gen.throw so the dep's `except` clause sees it, then re-raise.
         let routing_mod = py.import_bound("fastapi_rust._routing")?;
         let async_caller = routing_mod.getattr("call_with_async_handling")?;
-        let result = async_caller.call1((handler.bind(py), &kwargs))?.unbind();
+        let drainer = routing_mod.getattr("drain_yield_deps")?;
+        let result = match async_caller.call1((handler.bind(py), &kwargs)) {
+            Ok(r) => {
+                let _ = drainer.call0();
+                r.unbind()
+            }
+            Err(e) => {
+                let py_exc = e.value_bound(py).clone();
+                let _ = drainer.call1((py_exc,));
+                return Err(e);
+            }
+        };
         let is_head = method == "HEAD";
 
         // Detect Starlette Response — handler returned a fully-formed response.
@@ -1325,6 +1361,13 @@ impl APIRouter {
         let extra_tags = tags.unwrap_or_default();
         let inner_prefix = router.prefix.lock().clone();
         let inner_tags = router.tags.lock().clone();
+        // Phase L: same router-level dep merging as on FastAPI.include_router.
+        let inner_deps: Vec<PyObject> = router
+            .dependencies
+            .lock()
+            .iter()
+            .map(|p| p.clone_ref(py))
+            .collect();
         for r in router.routes.lock().iter() {
             let mut joined = String::with_capacity(prefix.len() + inner_prefix.len() + r.path.len());
             joined.push_str(&prefix);
@@ -1357,7 +1400,11 @@ impl APIRouter {
                 response_model_exclude_defaults: r.response_model_exclude_defaults,
                 response_model_by_alias: r.response_model_by_alias,
                 response_model_include: r.response_model_include.as_ref().map(|p| p.clone_ref(py)),
-                response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)), dependencies: r.dependencies.iter().map(|p| p.clone_ref(py)).collect(),
+                response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)), dependencies: {
+                    let mut merged: Vec<PyObject> = inner_deps.iter().map(|p| p.clone_ref(py)).collect();
+                    for p in r.dependencies.iter() { merged.push(p.clone_ref(py)); }
+                    merged
+                },
                 security: r.security.iter().map(|s| s.clone_ref(py)).collect(), operation_id: r.operation_id.clone(), responses: r.responses.as_ref().map(|p| p.clone_ref(py)), response_description: r.response_description.clone(),
             });
         }

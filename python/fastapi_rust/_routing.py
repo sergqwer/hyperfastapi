@@ -100,23 +100,121 @@ def call_with_async_handling(callable_, kwargs):
     """Invoke `callable_(**kwargs)` synchronously, transparently running
     async callables via `_run_coro_blocking` so dispatch stays sync.
 
-    Generators (sync `yield` deps) yield a single value; we capture the first
-    yielded value and the generator object so the caller can drive teardown.
-    For Phase D-1 we discard the generator after first yield (no teardown);
-    Phase D-3 wires up proper LIFO cleanup.
+    Phase L: yield-style deps (both sync generator and async generator) get
+    their first yielded value returned to the caller; the live generator is
+    pushed onto ``_bg._current_yield_gens`` so ``drain_yield_deps()`` can
+    advance them through their finally/except blocks AFTER the handler has
+    finished running.
     """
     import inspect as _ins
-    is_async = _ins.iscoroutinefunction(callable_) or (
+    is_async_fn = _ins.iscoroutinefunction(callable_) or (
         not _ins.isclass(callable_)
         and hasattr(callable_, "__call__")
         and _ins.iscoroutinefunction(callable_.__call__)
     )
-    if is_async:
+    is_async_gen_fn = _ins.isasyncgenfunction(callable_) or (
+        not _ins.isclass(callable_)
+        and hasattr(callable_, "__call__")
+        and _ins.isasyncgenfunction(callable_.__call__)
+    )
+
+    if is_async_gen_fn:
+        from . import _bg as _bg_state
+        agen = callable_(**kwargs)
+
+        async def _first():
+            return await agen.__anext__()
+
+        first_value = _run_coro_blocking(_first())
+        _bg_state._current_yield_gens.append(("async", agen))
+        return first_value
+
+    if is_async_fn:
         return _run_coro_blocking(callable_(**kwargs))
+
     result = callable_(**kwargs)
     if _ins.isgenerator(result):
-        return next(result)
+        from . import _bg as _bg_state
+        first_value = next(result)
+        _bg_state._current_yield_gens.append(("sync", result))
+        return first_value
     return result
+
+
+def drain_yield_deps(exc=None):
+    """Advance every live yield-dep generator past its yield point.
+
+    Called from Rust dispatch after the handler runs (with no exc), or after
+    the handler raised (exc is not None). Walks ``_bg._current_yield_gens`` in
+    LIFO order — last opened, first closed — matching FastAPI's contract.
+
+    For sync generators: ``next(gen)`` runs everything after the yield (the
+    finally block). If we have an ``exc``, ``gen.throw()`` injects it so the
+    dep's ``except`` clause sees it before the finally.
+
+    For async generators: same but via ``athrow`` / ``__anext__``, driven on
+    the worker loop.
+    """
+    from . import _bg as _bg_state
+    gens = _bg_state._current_yield_gens
+    if not gens:
+        return
+    # Drain in reverse — last setup, first teardown.
+    teardown_exc: BaseException | None = None
+    while gens:
+        kind, gen = gens.pop()
+        try:
+            if kind == "sync":
+                if exc is not None:
+                    try:
+                        gen.throw(type(exc), exc, exc.__traceback__)
+                    except StopIteration:
+                        pass
+                    except BaseException as raised:
+                        # The dep re-raised (or raised something new). Keep
+                        # going through the stack so each dep sees teardown,
+                        # then re-raise the last exception we collected.
+                        if raised is exc:
+                            pass
+                        else:
+                            teardown_exc = raised
+                else:
+                    try:
+                        next(gen)
+                    except StopIteration:
+                        pass
+            else:  # async
+                async def _step(g=gen, e=exc):
+                    try:
+                        if e is not None:
+                            await g.athrow(type(e), e, e.__traceback__)
+                        else:
+                            await g.__anext__()
+                    except (StopAsyncIteration, StopIteration):
+                        return
+                try:
+                    _run_coro_blocking(_step())
+                except BaseException as raised:
+                    if raised is not exc:
+                        teardown_exc = raised
+        finally:
+            try:
+                if kind == "sync":
+                    gen.close()
+                else:
+                    async def _aclose(g=gen):
+                        try:
+                            await g.aclose()
+                        except Exception:
+                            pass
+                    try:
+                        _run_coro_blocking(_aclose())
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    if teardown_exc is not None and exc is None:
+        raise teardown_exc
 
 
 def extract_security_info(
@@ -269,10 +367,39 @@ def resolve_dependencies(
             name.replace("_", "-") if (source == "header" and convert_underscores) else name
         )
 
+        # Phase L: lift cast-exception handling so a malformed value (e.g.
+        # `?limit=not-a-number` for an int param) surfaces as a typed 422
+        # validation error rather than a 500. Matches the top-level path used
+        # by Rust dispatch — class-as-Depends sub-deps were the gap.
+        loc_kind = source if source in ("path", "query", "header", "cookie", "body") else "query"
+        if source in ("form", "file"):
+            loc_kind = "body"
+
+        def _safe_cast(raw_val, kind):
+            try:
+                return _cast(raw_val, kind, source, name, validators), None
+            except (ValueError, TypeError):
+                err_type = "int_parsing" if kind == "int" else (
+                    "float_parsing" if kind == "float" else (
+                        "bool_parsing" if kind == "bool" else (
+                            "uuid_parsing" if kind == "uuid" else "type_error"
+                        )
+                    )
+                )
+                return None, {
+                    "status": 422,
+                    "detail": [{
+                        "type": err_type,
+                        "loc": [loc_kind, name],
+                        "msg": f"Input should be a valid {kind}",
+                        "input": raw_val,
+                    }],
+                }
+
         if source == "path":
             for n, v in path_params:
                 if n == name:
-                    return _cast(v, type_kind, source, name, validators), None
+                    return _safe_cast(v, type_kind)
             if required:
                 return None, _missing(source, lookup_key)
             return _SENTINEL_DEFAULT, None
@@ -295,8 +422,14 @@ def resolve_dependencies(
 
         if type_kind.startswith("list["):
             inner = type_kind[5:-1]
-            return [_cast(v, inner, source, name, validators) for v in vals], None
-        return _cast(vals[0], type_kind, source, name, validators), None
+            cast_vals = []
+            for v in vals:
+                cv, err = _safe_cast(v, inner)
+                if err:
+                    return None, err
+                cast_vals.append(cv)
+            return cast_vals, None
+        return _safe_cast(vals[0], type_kind)
 
     def _resolve_dep(entry, parent_scopes=None):
         callable_ = entry["dep_callable"]

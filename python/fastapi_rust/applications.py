@@ -451,6 +451,11 @@ class FastAPI(_RustFastAPI):
         _bg_state._current_tasks = None
         _bg_state._current_request = request
         _bg_state._current_raw_response = None
+        # Phase L: every request gets a fresh yield-dep generator stack.
+        # Rust dispatch drains it after the handler runs (before this method
+        # returns). Anything still here at finally time means dispatch
+        # bailed out before drain — close them out so resources don't leak.
+        _bg_state._current_yield_gens = []
         try:
             status, headers, response_body = self._dispatch(
                 method, path, query_string, headers_list, body
@@ -459,9 +464,19 @@ class FastAPI(_RustFastAPI):
             raw_resp = _bg_state._current_raw_response
             return status, headers, response_body, tasks, raw_resp
         finally:
+            # If dispatch raised before drain ran, close any gens with throw
+            # so their finally blocks still execute.
+            leftover = _bg_state._current_yield_gens
+            if leftover:
+                from . import _routing as _r
+                try:
+                    _r.drain_yield_deps()
+                except Exception:
+                    pass
             _bg_state._current_tasks = None
             _bg_state._current_request = None
             _bg_state._current_raw_response = None
+            _bg_state._current_yield_gens = []
 
 
 __all__ = ["FastAPI"]

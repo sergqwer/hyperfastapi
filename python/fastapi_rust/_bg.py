@@ -17,3 +17,9 @@ _current_request: Any = None
 # drives it via ``await response(scope, receive, send)`` instead of trying to
 # unpack the body bytes.
 _current_raw_response: Any = None
+
+# Phase L: live yield-dep generators (sync + async) for the in-flight request.
+# Pushed by resolve_dependencies as each yield-dep advances past its first
+# yield; drained in LIFO order by drain_yield_deps after the handler runs
+# (success → next(); exception → gen.throw() so the dep's except/finally fire).
+_current_yield_gens: list = []
