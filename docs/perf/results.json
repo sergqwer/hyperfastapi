@@ -1,5 +1,5 @@
 {
-  "run_id": "2026-05-08T15-34-04Z",
+  "run_id": "2026-05-08T16-25-08Z",
   "duration_sec": 5,
   "system": {
     "cpu_model": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
@@ -13,57 +13,57 @@
   "scenarios": [
     {
       "name": "get_plain",
-      "fastapi_uvicorn_single": 2489.65,
-      "fastapi_uvicorn_multi": 17104.43,
-      "hyperfastapi_uvicorn_single": 12222.03,
-      "hyperfastapi_uvicorn_multi": 78062.01,
-      "hyperfastapi_hyper_single": 73761.32,
-      "hyperfastapi_hyper_multi": 58246.65
+      "fastapi_uvicorn_single": 3692.3,
+      "fastapi_uvicorn_multi": 21518.33,
+      "hyperfastapi_uvicorn_single": 14878.34,
+      "hyperfastapi_uvicorn_multi": 94565.95,
+      "hyperfastapi_hyper_single": 103175.0,
+      "hyperfastapi_hyper_multi": 139521.72
     },
     {
       "name": "get_with_query",
-      "fastapi_uvicorn_single": 2207.35,
-      "fastapi_uvicorn_multi": 10292.04,
-      "hyperfastapi_uvicorn_single": 10137.46,
-      "hyperfastapi_uvicorn_multi": 58612.14,
-      "hyperfastapi_hyper_single": 35315.72,
-      "hyperfastapi_hyper_multi": 28939.64
+      "fastapi_uvicorn_single": 3365.58,
+      "fastapi_uvicorn_multi": 17466.39,
+      "hyperfastapi_uvicorn_single": 11639.88,
+      "hyperfastapi_uvicorn_multi": 72879.28,
+      "hyperfastapi_hyper_single": 38960.4,
+      "hyperfastapi_hyper_multi": 30452.23
     },
     {
       "name": "post_validated",
-      "fastapi_uvicorn_single": 2460.83,
-      "fastapi_uvicorn_multi": 10225.69,
-      "hyperfastapi_uvicorn_single": 10142.87,
-      "hyperfastapi_uvicorn_multi": 57187.69,
-      "hyperfastapi_hyper_single": 38090.59,
-      "hyperfastapi_hyper_multi": 29568.96
+      "fastapi_uvicorn_single": 2790.46,
+      "fastapi_uvicorn_multi": 13186.8,
+      "hyperfastapi_uvicorn_single": 10554.01,
+      "hyperfastapi_uvicorn_multi": 64602.29,
+      "hyperfastapi_hyper_single": 33347.75,
+      "hyperfastapi_hyper_multi": 28638.98
     },
     {
       "name": "get_with_chain_deps",
-      "fastapi_uvicorn_single": 2201.56,
-      "fastapi_uvicorn_multi": 6811.35,
-      "hyperfastapi_uvicorn_single": 6711.02,
-      "hyperfastapi_uvicorn_multi": 39712.94,
-      "hyperfastapi_hyper_single": 19476.08,
-      "hyperfastapi_hyper_multi": 18844.22
+      "fastapi_uvicorn_single": 2026.12,
+      "fastapi_uvicorn_multi": 8646.49,
+      "hyperfastapi_uvicorn_single": 8603.4,
+      "hyperfastapi_uvicorn_multi": 58460.78,
+      "hyperfastapi_hyper_single": 28213.03,
+      "hyperfastapi_hyper_multi": 24061.7
     },
     {
       "name": "get_async",
-      "fastapi_uvicorn_single": 7265.42,
-      "fastapi_uvicorn_multi": 50724.48,
-      "hyperfastapi_uvicorn_single": 11014.54,
-      "hyperfastapi_uvicorn_multi": 72714.33,
-      "hyperfastapi_hyper_single": 60652.87,
-      "hyperfastapi_hyper_multi": 41845.01
+      "fastapi_uvicorn_single": 9455.41,
+      "fastapi_uvicorn_multi": 66098.52,
+      "hyperfastapi_uvicorn_single": 14389.46,
+      "hyperfastapi_uvicorn_multi": 90903.63,
+      "hyperfastapi_hyper_single": 122434.69,
+      "hyperfastapi_hyper_multi": 144710.42
     },
     {
       "name": "get_with_middleware",
-      "fastapi_uvicorn_single": 2758.31,
-      "fastapi_uvicorn_multi": 12378.29,
-      "hyperfastapi_uvicorn_single": 12293.28,
-      "hyperfastapi_uvicorn_multi": 80183.22,
-      "hyperfastapi_hyper_single": 77542.26,
-      "hyperfastapi_hyper_multi": 74555.32
+      "fastapi_uvicorn_single": 3489.43,
+      "fastapi_uvicorn_multi": 19053.06,
+      "hyperfastapi_uvicorn_single": 15831.5,
+      "hyperfastapi_uvicorn_multi": 96060.77,
+      "hyperfastapi_hyper_single": 106702.2,
+      "hyperfastapi_hyper_multi": 142978.81
     }
   ]
 }

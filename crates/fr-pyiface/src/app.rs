@@ -317,13 +317,13 @@ pub struct FastAPI {
     openapi_url: Mutex<Option<String>>,
     root_path: Mutex<String>,
     terms_of_service: Mutex<Option<String>>,
-    routes: Arc<Mutex<Vec<Route>>>,
+    pub(crate) routes: Arc<Mutex<Vec<Route>>>,
     dependency_overrides: PyObject,
     exception_handlers: PyObject,
     user_middleware: PyObject,
     default_response_class: Mutex<Option<PyObject>>,
     /// App-level `dependencies=[Depends(...)]` — applied to every route.
-    dependencies: Mutex<Vec<PyObject>>,
+    pub(crate) dependencies: Mutex<Vec<PyObject>>,
 }
 
 #[pymethods]
@@ -1242,10 +1242,11 @@ impl FastAPI {
     /// `headers`: list of (name, value) tuples from ASGI scope.
     /// `body`: bytes of the request body (Pydantic models go straight through
     /// `__pydantic_validator__.validate_json`).
-    /// Phase N: hyper-server entry. Combines `_bg.reset()` + `_dispatch()`
-    /// into one Rust method so the per-request Python overhead is just one
-    /// PyO3 method call instead of two getattr + two call sequences. Saves
-    /// ~3µs per request at the 50k+ RPS regime.
+    /// Phase N: hyper-server entry. Phase R: skip the _bg setup when the
+    /// matched route is trivial (no params/deps/path-vars/response_model/
+    /// response_class). Trivial routes don't touch _bg state, so paying for
+    /// 4 setattrs per request was ~2µs of pure overhead at the 50k+ RPS
+    /// regime. The non-trivial path keeps the setup unchanged.
     #[pyo3(signature = (method, path, query_string = None, headers = None, body = None))]
     fn _dispatch_native(
         &self,
@@ -1256,14 +1257,20 @@ impl FastAPI {
         headers: Option<Vec<(String, String)>>,
         body: Option<&Bound<'_, PyBytes>>,
     ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
-        // Inline _bg.reset(): set the four module-level globals directly via
-        // PyO3 instead of going through the Python wrapper. The cached _bg
-        // module reference itself is in the once_cell.
-        let bg = get_cached_bg_module(py)?;
-        bg.setattr("_current_tasks", py.None())?;
-        bg.setattr("_current_request", py.None())?;
-        bg.setattr("_current_raw_response", py.None())?;
-        bg.setattr("_current_yield_gens", PyList::empty_bound(py))?;
+        // Quick Rust-side check: does this exact (method, path) match a
+        // pre-registered trivial route? If so, skip _bg setup entirely.
+        // Otherwise fall back to the conservative-correct path that resets
+        // _bg state before dispatch (preserves run_native semantics for any
+        // non-trivial route — handlers that take Request, BackgroundTasks,
+        // yield deps, etc. — without coupling to the ASGI path's own setup).
+        let is_trivial = self.is_trivial_route(&method, &path);
+        if !is_trivial {
+            let bg = get_cached_bg_module(py)?;
+            bg.setattr("_current_tasks", py.None())?;
+            bg.setattr("_current_request", py.None())?;
+            bg.setattr("_current_raw_response", py.None())?;
+            bg.setattr("_current_yield_gens", PyList::empty_bound(py))?;
+        }
         self._dispatch(py, method, path, query_string, headers, body)
     }
 
@@ -1963,6 +1970,36 @@ pub(crate) struct DecoratorOpts {
 }
 
 impl FastAPI {
+    /// Phase R: Rust-only check that returns true iff (method, path) maps
+    /// to a route which the trivial fast path inside `_dispatch` will hit.
+    /// Lets the caller (run_native + ASGI bridge) skip per-request setup
+    /// that the trivial path doesn't need (_bg state, header materialization,
+    /// etc). Conservative: returns false on any uncertainty.
+    pub(crate) fn is_trivial_route(&self, method: &str, path: &str) -> bool {
+        // No app-level deps, otherwise even trivial-handler routes need
+        // resolve_dependencies + _bg setup.
+        if !self.dependencies.lock().is_empty() {
+            return false;
+        }
+        let routes = self.routes.lock();
+        for r in routes.iter() {
+            if r.method != method {
+                continue;
+            }
+            // Exact path only — placeholder routes (`/users/{id}`) need
+            // path_params extraction which doesn't qualify.
+            if r.path != path {
+                continue;
+            }
+            // The same predicate as the trivial fast path inside _dispatch.
+            return r.param_plan.is_empty()
+                && r.dependencies.is_empty()
+                && r.response_model.is_none()
+                && r.response_class.is_none();
+        }
+        false
+    }
+
     fn make_decorator(&self, opts: DecoratorOpts) -> RouteDecorator {
         RouteDecorator {
             method: opts.method.to_string(),
@@ -2636,6 +2673,15 @@ fn build_redoc_html(title: &str, openapi_url: &str) -> String {
 </body>
 </html>"##
     )
+}
+
+/// Phase R+: public fallback for trivial dispatch in server.rs. Handles
+/// "exotic" types (Pydantic, datetime, UUID) that json_fast doesn't.
+pub(crate) fn serialize_value_fallback_for_trivial(
+    py: Python<'_>,
+    value: &PyObject,
+) -> Result<Vec<u8>, String> {
+    serialize_value_to_json(py, value).map_err(|e| e.to_string())
 }
 
 fn serialize_value_to_json(py: Python<'_>, value: &PyObject) -> PyResult<Vec<u8>> {

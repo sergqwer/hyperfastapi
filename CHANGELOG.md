@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+* **Phase R: hot-path overhaul** — single-process trivial route throughput
+  jumps to **103-127k RPS** (from 73k):
+  * `_dispatch_native` no longer does 4 unconditional `_bg.setattr()` writes;
+    deferred into the slow path. Trivial routes never touch `_bg` state.
+  * Static-route HashMap snapshot at server start: `(method, path)` → cached
+    handler + status_code + is_async. Per-request lookup is O(1) without GIL
+    or Mutex.
+  * `dispatch_trivial` bypasses `_dispatch_native` entirely for trivial
+    routes — calls handler directly + `json_fast::encode` + builds the
+    hyper response in Rust. ~750ns saved per req.
+  * `coro.send(None)` fast path inlined in Rust for async-trivial routes.
+    Real-await coroutines fall through to the worker loop — same behaviour
+    as `call_with_async_handling` in Python, just one Rust frame closer.
+  * Server skips header materialization (12 String allocs avg) and body
+    collect for trivial routes; uses `req.into_parts()` so method/path/query
+    can be borrowed as `&str` instead of allocating three Strings.
+  * HTTP method `to_ascii_uppercase()` allocation dropped — RFC 7230
+    requires uppercase already.
+
+  Aggregate single-process speedup vs Phase Q baseline: `/plain` +40%,
+  `/async` +102%, `/async-io` +74%, `/with-middleware` +37%.
+  4-process aggregate: `/plain` 155k → **249k**, `/async` 143k → **229k**.
+
 * **`/async` regression fixed** — `async def` handlers without an actual
   `await` now skip the event loop entirely. `coro.send(None)` raises
   `StopIteration` with the return value immediately; no cross-thread

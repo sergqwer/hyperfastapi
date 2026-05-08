@@ -53,12 +53,12 @@ You keep all of FastAPI's ergonomics. You get most of [actix-web](https://actix.
 
 | Scenario              | FastAPI + uvicorn | hyperfastapi + hyper | Speedup |
 | --------------------- | ----------------: | -------------------: | ------: |
-| GET `/plain`          |             2,490 |           **73,761** |  29.6 × |
-| GET `/with-middleware`|             2,758 |           **77,542** |  28.1 × |
-| GET `/async`          |             7,265 |           **60,653** |   8.4 × |
-| POST `/post-validated`|             2,461 |           **38,091** |  15.5 × |
-| GET `/with-query`     |             2,207 |           **35,316** |  16.0 × |
-| GET `/with-chain`     |             2,202 |           **19,476** |   8.8 × |
+| GET `/async`          |             9,455 |          **122,435** |  12.9 × |
+| GET `/with-middleware`|             3,489 |          **106,702** |  30.6 × |
+| GET `/plain`          |             3,692 |          **103,175** |  27.9 × |
+| GET `/with-query`     |             3,366 |           **38,960** |  11.6 × |
+| POST `/post-validated`|             2,790 |           **33,348** |  11.9 × |
+| GET `/with-chain`     |             2,026 |           **28,213** |  13.9 × |
 
 ### Multi-process throughput (4 Python procs)
 
@@ -66,12 +66,12 @@ You keep all of FastAPI's ergonomics. You get most of [actix-web](https://actix.
 
 | Scenario              | FastAPI + uvicorn (workers=4) | hyperfastapi + hyper (4 procs) | Speedup |
 | --------------------- | ----------------------------: | -----------------------------: | ------: |
-| GET `/plain`          |                        17,104 |                    **155,238** |   9.1 × |
-| GET `/with-middleware`|                        12,378 |                    **150,758** |  12.2 × |
-| GET `/async`          |                        50,724 |                    **143,455** |   2.8 × |
-| GET `/with-query`     |                        10,292 |                     **98,472** |   9.6 × |
-| POST `/post-validated`|                        10,226 |                     **87,468** |   8.6 × |
-| GET `/with-chain`     |                         6,811 |                     **63,440** |   9.3 × |
+| GET `/plain`          |                        21,518 |                    **249,391** |  11.6 × |
+| GET `/with-middleware`|                        19,053 |                    **247,792** |  13.0 × |
+| GET `/async`          |                        66,099 |                    **229,734** |   3.5 × |
+| GET `/with-query`     |                        17,466 |                     **99,415** |   5.7 × |
+| POST `/post-validated`|                        13,187 |                     **91,696** |   7.0 × |
+| GET `/with-chain`     |                         8,646 |                     **76,854** |   8.9 × |
 
 All 6 scenarios cross **100,000 RPS** on a 4-process Windows machine — including `/async`, which now hits 143k.
 

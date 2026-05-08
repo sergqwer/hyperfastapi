@@ -1,77 +1,77 @@
 {
-  "run_id": "2026-05-08T15-28-53Z",
+  "run_id": "2026-05-08T16-20-01Z",
   "duration_sec": 5,
   "workers": 4,
   "scenarios": [
     {
       "name": "get_plain",
       "workers": 4,
-      "rps_total": 155237.84000000003,
+      "rps_total": 249390.77,
       "rps_per_proc": [
-        38163.78,
-        41049.94,
-        37858.01,
-        38166.11
+        62377.27,
+        61660.13,
+        62079.91,
+        63273.46
       ],
       "errors_5xx_total": 0
     },
     {
       "name": "get_with_query",
       "workers": 4,
-      "rps_total": 98471.78,
+      "rps_total": 99414.90000000001,
       "rps_per_proc": [
-        24002.96,
-        25192.86,
-        24574.14,
-        24701.82
+        24342.96,
+        25300.57,
+        24832.49,
+        24938.88
       ],
       "errors_5xx_total": 0
     },
     {
       "name": "post_validated",
       "workers": 4,
-      "rps_total": 87467.75,
+      "rps_total": 91695.73999999999,
       "rps_per_proc": [
-        21681.2,
-        22234.15,
-        21966.47,
-        21585.93
+        22958.68,
+        22990.73,
+        22880.51,
+        22865.82
       ],
       "errors_5xx_total": 0
     },
     {
       "name": "get_with_chain_deps",
       "workers": 4,
-      "rps_total": 63439.95,
+      "rps_total": 76853.6,
       "rps_per_proc": [
-        15904.87,
-        15473.21,
-        16112.39,
-        15949.48
+        19559.74,
+        19041.72,
+        19288.69,
+        18963.45
       ],
       "errors_5xx_total": 0
     },
     {
       "name": "get_async",
       "workers": 4,
-      "rps_total": 143454.74000000002,
+      "rps_total": 229733.56,
       "rps_per_proc": [
-        35352.75,
-        35642.44,
-        35848.98,
-        36610.57
+        59055.28,
+        57529.93,
+        56472.82,
+        56675.53
       ],
       "errors_5xx_total": 0
     },
     {
       "name": "get_with_middleware",
       "workers": 4,
-      "rps_total": 150757.84000000003,
+      "rps_total": 247792.41999999998,
       "rps_per_proc": [
-        36750.58,
-        37644.24,
-        37149.79,
-        39213.23
+        63204.43,
+        60638.14,
+        61473.67,
+        62476.18
       ],
       "errors_5xx_total": 0
     }

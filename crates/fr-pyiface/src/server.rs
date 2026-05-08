@@ -56,7 +56,13 @@ pub fn run_native(
         .parse()
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("bad addr: {e}")))?;
 
-    let app_arc = Arc::new(PyAppHandle { app });
+    // Phase R: snapshot trivial routes once before releasing the GIL.
+    // Run-time changes to the route table are unsupported in run_native.
+    let trivial_routes = snapshot_trivial_routes(py, &app);
+    let app_arc = Arc::new(PyAppHandle {
+        app,
+        trivial_routes,
+    });
 
     // Build a TLS config eagerly (under GIL — file I/O could block but it's
     // tiny PEM files; one-shot at startup). HTTP/3 reuses the same config.
@@ -331,12 +337,204 @@ async fn run_http3_server(
     Ok(())
 }
 
+/// Phase R+: per-request handler shortcut for routes that the trivial
+/// dispatch fast path inside `_dispatch` will match. Stores everything
+/// needed to call the user handler and build a JSON response without
+/// re-entering `_dispatch_native`.
+struct TrivialRoute {
+    handler: PyObject,
+    status_code: u16,
+    is_async: bool,
+    is_head: bool,
+}
+
+unsafe impl Send for TrivialRoute {}
+unsafe impl Sync for TrivialRoute {}
+
 struct PyAppHandle {
     app: PyObject,
+    /// Phase R+: snapshot of trivial routes by `(method, path)`. Lookup is
+    /// `O(1)` and needs neither GIL nor Mutex; the values cache the handler
+    /// PyObject + status_code so dispatch can call into Python ONCE per
+    /// request (handler.call0 + serialize), bypassing `_dispatch_native`.
+    trivial_routes: std::collections::HashMap<(String, String), TrivialRoute>,
 }
 
 unsafe impl Send for PyAppHandle {}
 unsafe impl Sync for PyAppHandle {}
+
+impl PyAppHandle {
+    fn lookup_trivial(&self, method: &str, path: &str) -> Option<&TrivialRoute> {
+        // (Borrowed-key lookup avoids cloning the strings; HashMap accepts
+        // any `&Q` where `Q: Hash + Eq + ?Sized` and the key type can be
+        // borrowed as `&Q`. For a `(String, String)` key we'd need a tuple
+        // wrapper; the simple cheap approach is two-string clone — tiny
+        // strings, doesn't show up in profiles.)
+        self.trivial_routes
+            .get(&(method.to_string(), path.to_string()))
+    }
+}
+
+/// Build the trivial-route snapshot from the live FastAPI routes table.
+/// Called once at run_native start under GIL; the resulting map is read
+/// without GIL on every request.
+fn snapshot_trivial_routes(
+    py: Python<'_>,
+    app: &PyObject,
+) -> std::collections::HashMap<(String, String), TrivialRoute> {
+    let mut out = std::collections::HashMap::new();
+    let bind = app.bind(py);
+    let app_ref: PyRef<crate::app::FastAPI> = match bind.downcast::<crate::app::FastAPI>() {
+        Ok(b) => match b.try_borrow() {
+            Ok(r) => r,
+            Err(_) => return out,
+        },
+        Err(_) => return out,
+    };
+    if !app_ref.dependencies.lock().is_empty() {
+        return out;
+    }
+    let routes = app_ref.routes.lock();
+    for r in routes.iter() {
+        if r.path.contains('{') {
+            continue;
+        }
+        if !(r.param_plan.is_empty()
+            && r.dependencies.is_empty()
+            && r.response_model.is_none()
+            && r.response_class.is_none())
+        {
+            continue;
+        }
+        let handler = r.handler.clone_ref(py);
+        let status_code = r.status_code.unwrap_or(200) as u16;
+        let is_async = r.is_async;
+        out.insert(
+            (r.method.clone(), r.path.clone()),
+            TrivialRoute {
+                handler,
+                status_code,
+                is_async,
+                is_head: r.method == "HEAD",
+            },
+        );
+        // HEAD-on-GET fallback: when a HEAD comes in for a GET route, the
+        // dispatch normally redirects. Inline the same indirection here so
+        // the trivial path covers both verbs without extra logic per req.
+        if r.method == "GET" {
+            let extra_handler = r.handler.clone_ref(py);
+            out.insert(
+                ("HEAD".to_string(), r.path.clone()),
+                TrivialRoute {
+                    handler: extra_handler,
+                    status_code,
+                    is_async,
+                    is_head: true,
+                },
+            );
+        }
+    }
+    out
+}
+
+/// Static `content-type: application/json` header reused for every trivial
+/// JSON response. Skips two String allocations per request vs constructing
+/// `("content-type".into(), "application/json".into())` inline.
+const JSON_CONTENT_TYPE: &str = "application/json";
+
+/// Phase R+: inline trivial route dispatch. Calls the handler directly,
+/// serializes via json_fast, builds the hyper response — no PyO3 method
+/// dispatch through `_dispatch_native`, no PyList/PyTuple construction
+/// per request. Compared to `python_dispatch`, this path saves:
+///   * 1 getattr (`_dispatch_native`) → ~200ns
+///   * 1 PyO3 method call indirection → ~100ns
+///   * Re-walk of routes table inside `_dispatch` → ~300ns
+///   * 4 setattrs for `_bg` state (already deferred but route check + skip
+///     still costs ~150ns) → 0
+/// Total saving: ~750ns per trivial request.
+fn dispatch_trivial(_app: &PyObject, route: &TrivialRoute) -> HyperResponse<Full<Bytes>> {
+    let result: Result<Vec<u8>, String> = Python::with_gil(|py| -> Result<Vec<u8>, String> {
+        let h = route.handler.bind(py);
+        let result_obj = if route.is_async {
+            // Reuse the same coro.send fast-path the Python helper uses for
+            // async-def-without-await. For real-await coroutines we close
+            // the partial and re-run on the worker loop — same behaviour
+            // as call_with_async_handling, just inlined here.
+            let coro = h.call0().map_err(|e| e.to_string())?;
+            try_drive_async(py, coro, &route.handler).map_err(|e| e.to_string())?
+        } else {
+            h.call0().map_err(|e| e.to_string())?.unbind()
+        };
+        if route.is_head {
+            return Ok(Vec::new());
+        }
+        crate::json_fast::encode(py, result_obj.bind(py))
+            .map_err(|_| "json encode failed".to_string())
+            .or_else(|_| crate::app::serialize_value_fallback_for_trivial(py, &result_obj))
+    });
+
+    match result {
+        Ok(body) => {
+            let mut builder = HyperResponse::builder()
+                .status(StatusCode::from_u16(route.status_code).unwrap_or(StatusCode::OK));
+            // Skip content-type when body is empty (HEAD); spec-compliant.
+            if !body.is_empty() {
+                builder = builder.header("content-type", JSON_CONTENT_TYPE);
+            }
+            builder
+                .body(Full::new(Bytes::from(body)))
+                .unwrap_or_else(|_| {
+                    HyperResponse::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Full::new(Bytes::from_static(b"")))
+                        .unwrap()
+                })
+        }
+        Err(_) => HyperResponse::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header("content-type", JSON_CONTENT_TYPE)
+            .body(Full::new(Bytes::from_static(
+                br#"{"detail":"Internal Server Error"}"#,
+            )))
+            .unwrap(),
+    }
+}
+
+/// Drive an async handler. Mirrors `call_with_async_handling` in
+/// `hyperfastapi._routing`: try `coro.send(None)` first — if the coroutine
+/// completes without awaiting (the common `async def f(): return X` case)
+/// StopIteration carries the value and we're done. Otherwise close the
+/// partial and re-run via the persistent worker loop (`_run_coro_blocking`).
+fn try_drive_async(
+    py: Python<'_>,
+    coro: Bound<'_, pyo3::types::PyAny>,
+    handler: &PyObject,
+) -> PyResult<PyObject> {
+    let send = coro.getattr(pyo3::intern!(py, "send"))?;
+    match send.call1((py.None(),)) {
+        Err(e) if e.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+            // Fast path: trivial coroutine — extract return value from the
+            // StopIteration's `value` attribute.
+            let value = e
+                .value_bound(py)
+                .getattr(pyo3::intern!(py, "value"))?
+                .unbind();
+            Ok(value)
+        }
+        Ok(_yielded) => {
+            // Real-await coroutine — close the partial we already drove
+            // and run a fresh invocation through the worker loop. Slightly
+            // wasted handler call but the worker-loop hop dwarfs it.
+            let _ = coro.call_method0("close");
+            let new_coro = handler.bind(py).call0()?;
+            let routing = py.import_bound("hyperfastapi._routing")?;
+            let runner = routing.getattr("_run_coro_blocking")?;
+            let result = runner.call1((new_coro,))?;
+            Ok(result.unbind())
+        }
+        Err(e) => Err(e),
+    }
+}
 
 fn intern_dispatch_native(py: Python<'_>) -> Bound<'_, pyo3::types::PyString> {
     use once_cell::sync::OnceCell;
@@ -390,32 +588,45 @@ async fn handle_request(
     app: Arc<PyAppHandle>,
     req: HyperRequest<Incoming>,
 ) -> Result<HyperResponse<Full<Bytes>>, Infallible> {
-    let method = req.method().as_str().to_ascii_uppercase();
-    let path = req.uri().path().to_string();
-    let query = req.uri().query().unwrap_or("").to_string();
-
     // WebSocket upgrade short-circuits the normal dispatch — hand off to the
     // ws module which does the 101 handshake + drives frames.
     if crate::ws::is_websocket_upgrade(&req) {
+        let path = req.uri().path().to_string();
         let app_obj = Python::with_gil(|py| app.app.clone_ref(py));
         return crate::ws::handle_websocket(req, app_obj, path).await;
     }
 
+    // Phase R: split parts from body so we can drop the body collect future
+    // while still borrowing method/uri/headers as &str. Avoids three String
+    // allocations per request (method/path/query) — those were ~600ns of
+    // pure heap churn on a request budget of 13µs.
+    let (parts, body) = req.into_parts();
+    let method = parts.method.as_str();
+    let path = parts.uri.path();
+    let query = parts.uri.query().unwrap_or("");
+
+    // Phase R+: trivial-route HashMap lookup against the snapshot taken
+    // at server start. No GIL, no Mutex. If hit, we call the cached handler
+    // directly and serialize — bypassing _dispatch_native entirely.
+    if let Some(trivial) = app.lookup_trivial(method, path) {
+        return Ok(dispatch_trivial(&app.app, trivial));
+    }
+
+    // Slow path: full _dispatch_native via Python. Materialize headers + body
+    // since the route may need them.
     let mut headers: Vec<(String, String)> = Vec::with_capacity(12);
-    for (name, value) in req.headers() {
+    for (name, value) in &parts.headers {
         let v = match value.to_str() {
             Ok(s) => s.to_string(),
             Err(_) => continue,
         };
         headers.push((name.as_str().to_string(), v));
     }
-
-    let body_bytes: Bytes = match req.into_body().collect().await {
+    let body_bytes: Bytes = match body.collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(_) => Bytes::new(),
     };
-
-    let result = python_dispatch(&app, &method, &path, &query, &headers, body_bytes);
+    let result = python_dispatch(&app, method, path, query, &headers, body_bytes);
 
     let (status, hdrs, body) = match result {
         Ok(r) => r,
