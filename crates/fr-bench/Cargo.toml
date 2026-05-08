@@ -1,0 +1,21 @@
+[package]
+name = "fr-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Criterion micro-benchmarks for hot-path Rust code"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "placeholder"
+harness = false
+
+[dependencies]
+fr-core = { path = "../fr-core" }
+fr-json = { path = "../fr-json" }

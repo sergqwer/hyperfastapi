@@ -1,0 +1,46 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fastapi-rust"
+version = "0.1.0"
+description = "Rust port of FastAPI with PyO3 — sibling package, same Python API"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "fastapi-rust contributors" }]
+keywords = ["fastapi", "rust", "pyo3", "asgi", "performance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+]
+
+dependencies = [
+    # Pydantic-core is already Rust; we call it directly via PyO3.
+    "pydantic>=2.5",
+    # Multipart parsing helpers (we use Rust `multer` for the hot path,
+    # but Python-side dep avoids version skew when tests import its types).
+    "python-multipart>=0.0.9",
+    # Starlette gives us `status` constants and a few re-exports we don't reimplement.
+    # Pinned <0.47 to stay compatible with vanilla fastapi 0.115.x in our test deps,
+    # so the same Python install runs both vanilla fastapi and fastapi_rust.
+    "starlette>=0.40,<0.47",
+    # AnyIO is needed for TestClient internals (HTTP request orchestration).
+    "anyio>=4.0",
+]
+
+[project.optional-dependencies]
+templating = ["jinja2>=3.1.0"]
+
+[tool.maturin]
+manifest-path = "crates/fr-pyiface/Cargo.toml"
+module-name = "fastapi_rust._core"
+python-source = "python"
+# extension-module feature is set in fr-pyiface/Cargo.toml; abi3 there too.
+features = ["pyo3/extension-module"]
+strip = true

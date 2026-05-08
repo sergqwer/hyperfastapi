@@ -3,17 +3,58 @@
 Captures per-test outcomes via pytest_runtest_makereport and writes a
 machine-readable JSON summary to tests/results/conformance/<timestamp>.json
 at session end. Perf tests write their own results from perf/runner.py.
+
+Set `FASTAPI_RUST_AS_FASTAPI=1` to run the same tests against the Rust port:
+  - sys.modules["fastapi"] (and submodules) are aliased to the fastapi_rust
+    package, so `from fastapi import ...` resolves to our Rust extension
+    without any code changes in the test files.
+  - Without that env var, the suite runs against vanilla fastapi as usual.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import platform
 import sys
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+# ----- Optional fastapi_rust alias (must run before pytest collects tests) -
+# Done at module import time, BEFORE pytest does anything else with imports,
+# so test files that do `from fastapi import FastAPI` get our Rust class.
+if os.environ.get("FASTAPI_RUST_AS_FASTAPI") == "1":
+    import fastapi_rust  # noqa: F401  — triggers the cdylib load
+    import fastapi_rust.exceptions
+    import fastapi_rust.params
+    import fastapi_rust.responses
+    import fastapi_rust.security
+    import fastapi_rust.encoders
+    import fastapi_rust.testclient
+    import fastapi_rust.staticfiles
+    import fastapi_rust.templating
+    import fastapi_rust.middleware
+    import fastapi_rust.middleware.cors
+    import fastapi_rust.middleware.gzip
+    import fastapi_rust.middleware.trustedhost
+
+    # Top-level + submodules must all be aliased so `from fastapi.<sub> import X`
+    # finds the right object.
+    sys.modules["fastapi"] = fastapi_rust
+    sys.modules["fastapi.exceptions"] = fastapi_rust.exceptions
+    sys.modules["fastapi.params"] = fastapi_rust.params
+    sys.modules["fastapi.responses"] = fastapi_rust.responses
+    sys.modules["fastapi.security"] = fastapi_rust.security
+    sys.modules["fastapi.encoders"] = fastapi_rust.encoders
+    sys.modules["fastapi.testclient"] = fastapi_rust.testclient
+    sys.modules["fastapi.staticfiles"] = fastapi_rust.staticfiles
+    sys.modules["fastapi.templating"] = fastapi_rust.templating
+    sys.modules["fastapi.middleware"] = fastapi_rust.middleware
+    sys.modules["fastapi.middleware.cors"] = fastapi_rust.middleware.cors
+    sys.modules["fastapi.middleware.gzip"] = fastapi_rust.middleware.gzip
+    sys.modules["fastapi.middleware.trustedhost"] = fastapi_rust.middleware.trustedhost
 
 import pytest
 
@@ -43,6 +84,11 @@ def _category_for(nodeid: str) -> str:
         return "uncategorized"
     rest[-1] = rest[-1].removeprefix("test_").removesuffix(".py")
     return "/".join(rest)
+
+
+def _framework_name() -> str:
+    """Reports `fastapi_rust` when the alias is active, else `fastapi`."""
+    return "fastapi_rust" if os.environ.get("FASTAPI_RUST_AS_FASTAPI") == "1" else "fastapi"
 
 
 def _fastapi_version() -> str:
@@ -104,7 +150,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
     output = {
         "run_id": _run_id,
-        "framework": "fastapi",
+        "framework": _framework_name(),
         "framework_version": _fastapi_version(),
         "python_version": sys.version.split()[0],
         "platform": platform.platform(),

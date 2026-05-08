@@ -1,0 +1,22 @@
+[package]
+name = "fr-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core HTTP types: server, body, headers, lazy primitives, limits"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+bytes.workspace = true
+serde.workspace = true
+smallvec.workspace = true
+ahash.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
