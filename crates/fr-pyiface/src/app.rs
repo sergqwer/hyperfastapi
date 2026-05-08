@@ -389,6 +389,17 @@ impl FastAPI {
         }
     }
 
+    /// Phase G: look up a registered WebSocket handler for the given path.
+    /// Returns the handler PyObject if a matching route exists, else None.
+    fn _lookup_websocket(&self, py: Python<'_>, path: String) -> Option<PyObject> {
+        for r in self.routes.lock().iter() {
+            if r.method == "WEBSOCKET" && r.path == path {
+                return Some(r.handler.clone_ref(py));
+            }
+        }
+        None
+    }
+
     /// Phase B-2 extension: alternative `_dispatch` is now in module-level dispatch
     /// but we keep the route-level fields in sync — see below.
 

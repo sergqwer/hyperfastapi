@@ -256,7 +256,7 @@ class FastAPI(_RustFastAPI):
     async def _core_http_app(self, scope: Scope, receive: Receive, send: Send) -> None:
         scope_type = scope.get("type")
         if scope_type == "websocket":
-            await send({"type": "websocket.close", "code": 1011})
+            await self._handle_websocket(scope, receive, send)
             return
         if scope_type != "http":
             return
@@ -311,6 +311,34 @@ class FastAPI(_RustFastAPI):
         # BackgroundTasks: run after body sent. FIFO order, sync+async both ok.
         if background is not None:
             await background()
+
+    async def _handle_websocket(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Phase G: route websocket connections through Starlette's WebSocket
+        wrapper. The Rust side stores websocket routes keyed by path; we look
+        up the handler and invoke it with a Starlette WebSocket so async user
+        code can do ``await ws.accept(); await ws.send_text(...)``.
+        """
+        from starlette.websockets import WebSocket as StarletteWebSocket
+
+        path = scope.get("path", "")
+        handler = self._lookup_websocket(path)
+        if handler is None:
+            await send({"type": "websocket.close", "code": 1000})
+            return
+        ws = StarletteWebSocket(scope, receive=receive, send=send)
+        try:
+            if inspect.iscoroutinefunction(handler):
+                await handler(ws)
+            else:
+                handler(ws)  # sync handler — rare; let user own the protocol
+        except Exception:
+            # If handler raises, ensure the connection is closed so TestClient
+            # doesn't hang waiting for a frame.
+            try:
+                await ws.close(code=1011)
+            except Exception:
+                pass
+            raise
 
     async def _dispatch_async(
         self,
