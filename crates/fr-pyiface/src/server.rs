@@ -394,6 +394,13 @@ async fn handle_request(
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
 
+    // WebSocket upgrade short-circuits the normal dispatch — hand off to the
+    // ws module which does the 101 handshake + drives frames.
+    if crate::ws::is_websocket_upgrade(&req) {
+        let app_obj = Python::with_gil(|py| app.app.clone_ref(py));
+        return crate::ws::handle_websocket(req, app_obj, path).await;
+    }
+
     let mut headers: Vec<(String, String)> = Vec::with_capacity(12);
     for (name, value) in req.headers() {
         let v = match value.to_str() {

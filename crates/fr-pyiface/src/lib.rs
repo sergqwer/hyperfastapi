@@ -13,6 +13,7 @@ mod app;
 mod json_fast;
 mod params;
 mod server;
+mod ws;
 
 #[pymodule]
 fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -42,6 +43,9 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<params::File>()?;
     m.add_class::<params::Depends>()?;
     m.add_class::<params::Security>()?;
+
+    // ---- WebSocket bridge -------------------------------------------------
+    ws::register_pyclass(m)?;
 
     Ok(())
 }

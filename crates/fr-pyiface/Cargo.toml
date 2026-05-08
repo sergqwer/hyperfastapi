@@ -53,3 +53,11 @@ quinn = { version = "0.11", default-features = false, features = ["runtime-tokio
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
 http = "1"
+
+# WebSockets: tokio-tungstenite handles the framing once hyper hands us
+# the upgraded connection. We accept the upgrade ourselves (Sec-WebSocket-
+# Accept handshake) so we keep zero dependencies on Starlette's WS shim.
+tokio-tungstenite = { workspace = true }
+sha1 = "0.10"
+base64 = "0.22"
+futures-util = "0.3"
