@@ -12,8 +12,8 @@
 
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -101,7 +101,11 @@ async fn run(cli: Cli) {
             // Warmup so handshake / first-allocation latency doesn't poison
             // the measured window.
             for _ in 0..warmup {
-                if tx.send(Message::Text((*payload).clone().into())).await.is_err() {
+                if tx
+                    .send(Message::Text((*payload).clone().into()))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
                 if rx.next().await.is_none() {
@@ -113,7 +117,11 @@ async fn run(cli: Cli) {
             let mut local_sum = 0u64;
             for _ in 0..n_msgs {
                 let t0 = Instant::now();
-                if tx.send(Message::Text((*payload).clone().into())).await.is_err() {
+                if tx
+                    .send(Message::Text((*payload).clone().into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
                 if rx.next().await.is_none() {
@@ -153,7 +161,10 @@ async fn run(cli: Cli) {
     println!("  total msgs   = {total}");
     println!("  elapsed      = {:.3} s", elapsed_secs);
     println!("  throughput   = {:>10.0} msg/sec", rps);
-    println!("  per-conn     = {:>10.0} msg/sec", rps / cli.connections as f64);
+    println!(
+        "  per-conn     = {:>10.0} msg/sec",
+        rps / cli.connections as f64
+    );
     println!("  mean latency = {:.3} ms", mean_lat_us as f64 / 1000.0);
     println!("  max  latency = {:.3} ms", lat_max as f64 / 1000.0);
 }
