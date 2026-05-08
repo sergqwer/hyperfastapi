@@ -18,6 +18,11 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--tls-cert", default=None,
+                        help="PEM cert path; pair with --tls-key to enable HTTPS / ALPN-h2")
+    parser.add_argument("--tls-key", default=None, help="PEM private key path")
+    parser.add_argument("--http3", action="store_true",
+                        help="Enable HTTP/3 over QUIC on the same UDP port (requires TLS)")
     args = parser.parse_args()
 
     # Same alias trick as tests/conftest.py + tests/perf/apps.py — must run
@@ -63,7 +68,14 @@ def main() -> int:
         )
         return 1
 
-    app.run_native(host=args.host, port=args.port, workers=args.workers)
+    app.run_native(
+        host=args.host,
+        port=args.port,
+        workers=args.workers,
+        tls_cert=args.tls_cert,
+        tls_key=args.tls_key,
+        http3=args.http3,
+    )
     return 0
 
 

@@ -49,5 +49,9 @@ tests/results/
 # Bombardier binary (downloaded separately; not committed)
 tests/perf/bin/
 
+# Locally generated self-signed certs for protocol tests
+tests/perf/_cert.pem
+tests/perf/_key.pem
+
 # Coverage HTML report
 htmlcov/

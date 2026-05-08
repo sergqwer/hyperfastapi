@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* **HTTP/2 (cleartext + ALPN over TLS)** — `run_native()` now switches on
+  `hyper_util::server::conn::auto::Builder` so HTTP/1.1 and HTTP/2 are
+  served from the same TCP listener. Cleartext h2 (h2c) is auto-detected
+  from the client preface; over TLS, ALPN advertises `h2` + `http/1.1`.
+* **HTTPS via rustls 0.23** — opt-in by passing
+  `tls_cert="..." tls_key="..."` paths (PEM files). Mandatory for HTTP/3.
+* **HTTP/3 (QUIC) via quinn 0.11 + h3 0.0.8** — opt-in via `http3=True`,
+  binds an additional UDP listener on the same port. Plaintext responses
+  on the TCP path advertise `alt-svc: h3=":<port>"` so clients
+  auto-upgrade.
+* `tests/perf/test_protocols.py` — end-to-end smoke tests covering every
+  protocol with real httpx + curl + aioquic clients.
+* `tests/perf/gen_self_signed.py` — helper to generate a local cert/key
+  pair for HTTPS / HTTP/3 testing.
+
 ## [0.1.0] — 2026-05-08
 
 Initial release. **Drop-in FastAPI replacement** with a Rust core delivering

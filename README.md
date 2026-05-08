@@ -245,6 +245,37 @@ done
 
 ---
 
+## Protocol support
+
+`run_native()` speaks every modern HTTP flavor over a single command:
+
+| Protocol             | Transport | Status        | How                                            |
+| -------------------- | --------- | ------------- | ---------------------------------------------- |
+| HTTP/1.0             | TCP       | ✅ Supported  | Default; `Connection: close`                   |
+| HTTP/1.1 + keep-alive| TCP       | ✅ Supported  | Default                                        |
+| HTTP/2 cleartext (h2c)| TCP      | ✅ Supported  | Auto-detected from client preface              |
+| HTTPS (TLS 1.2/1.3)  | TLS / TCP | ✅ Supported  | `tls_cert=`, `tls_key=`                        |
+| HTTP/2 + TLS         | TLS / TCP | ✅ Supported  | ALPN-negotiated (h2 / http/1.1)                |
+| HTTP/3 (QUIC)        | UDP       | ✅ Supported  | `http3=True` (requires TLS)                    |
+
+```python
+# HTTP/1.1 + h2c plaintext (no TLS)
+app.run_native(host="0.0.0.0", port=8000)
+
+# HTTPS = HTTP/1.1 + HTTP/2 over TLS (ALPN)
+app.run_native(host="0.0.0.0", port=8443,
+               tls_cert="/etc/cert.pem", tls_key="/etc/key.pem")
+
+# Full stack: HTTP/1.1 + HTTP/2 + HTTP/3 (QUIC) over the same port
+app.run_native(host="0.0.0.0", port=8443,
+               tls_cert="/etc/cert.pem", tls_key="/etc/key.pem",
+               http3=True)
+```
+
+When `http3=True`, HTTPS responses include `alt-svc: h3=":<port>"; ma=86400` so HTTP/3-aware clients automatically upgrade.
+
+See [`docs/protocols.md`](docs/protocols.md) for the protocol cheat sheet plus end-to-end smoke-test instructions.
+
 ## Compatibility
 
 hyperfastapi **aliases as `fastapi`** for tests so the existing FastAPI test suite passes against it. To use it as a drop-in replacement in an existing codebase:
@@ -258,16 +289,9 @@ sys.modules.setdefault("fastapi", hyperfastapi)
 
 Or set `HYPERFASTAPI_AS_FASTAPI=1` and the patched `tests/conftest.py` does it automatically.
 
-### What does NOT work yet
-
-* **HTTP/2** — hyper supports it but `run_native()` currently only enables HTTP/1.1.
-* **TLS** — terminate at your load balancer (nginx, HAProxy, AWS ALB, etc.) for now.
-* **`reuse_port=True`** flag for `run_native` is on the roadmap (Linux/BSD only — Windows lacks `SO_REUSEPORT`).
-
 ### What requires uvicorn
 
 * **ASGI middleware** (`CORSMiddleware`, `GZipMiddleware`, custom `@app.middleware`). When using `run_native()`, these are no-ops. Use uvicorn if your app needs them.
-* **HTTP/2 over TLS** (with `uvicorn[standard]`).
 
 ---
 

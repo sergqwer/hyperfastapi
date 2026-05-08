@@ -960,18 +960,33 @@ impl FastAPI {
         Ok(())
     }
 
-    /// Phase N: native HTTP server entry point. Skips ASGI / uvicorn entirely
-    /// and serves directly from a Rust hyper server. Trade-off: ASGI middleware
-    /// (CORS, GZip, custom @app.middleware) is BYPASSED — handlers, deps,
-    /// validation, response_model, exception handlers all still run.
-    /// Use this for max-perf scenarios; use uvicorn for ASGI-rich deployments.
-    #[pyo3(signature = (host = "127.0.0.1".to_string(), port = 8000, workers = 0))]
+    /// Native HTTP server entry. Skips ASGI / uvicorn entirely and serves
+    /// directly from a Rust hyper + (optionally) quinn server.
+    ///
+    /// Protocol matrix:
+    ///   * default                                : HTTP/1.1 + HTTP/2 cleartext (h2c)
+    ///   * tls_cert+tls_key                       : HTTPS, ALPN-negotiated h2 / http/1.1
+    ///   * tls_cert+tls_key + http3=True          : adds HTTP/3 (QUIC) on UDP same port
+    ///
+    /// Trade-off: ASGI middleware (CORS, GZip, @app.middleware) is BYPASSED.
+    /// Handlers, deps, validation, response_model, exception handlers all run.
+    #[pyo3(signature = (
+        host = "127.0.0.1".to_string(),
+        port = 8000,
+        workers = 0,
+        tls_cert = None,
+        tls_key = None,
+        http3 = false,
+    ))]
     fn run_native(
         slf: Py<Self>,
         py: Python<'_>,
         host: String,
         port: u16,
         workers: usize,
+        tls_cert: Option<String>,
+        tls_key: Option<String>,
+        http3: bool,
     ) -> PyResult<()> {
         let n_workers = if workers == 0 {
             std::thread::available_parallelism()
@@ -980,7 +995,16 @@ impl FastAPI {
         } else {
             workers
         };
-        crate::server::run_native(py, slf.into_any(), &host, port, n_workers)
+        crate::server::run_native(
+            py,
+            slf.into_any(),
+            &host,
+            port,
+            n_workers,
+            tls_cert.as_deref(),
+            tls_key.as_deref(),
+            http3,
+        )
     }
 
     #[pyo3(signature = (path, endpoint, *, methods = None, response_class = None, **_kwargs))]
