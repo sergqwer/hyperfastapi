@@ -863,7 +863,7 @@ impl FastAPI {
             };
             let s: String = dict.get_item("source").ok().flatten()
                 .and_then(|v| v.extract().ok()).unwrap_or_default();
-            s == "depends" || s == "security"
+            s == "depends" || s == "security" || s == "background_tasks"
         });
         if needs_deps {
             let routing_mod = py.import_bound("fastapi_rust._routing")?;
@@ -1533,7 +1533,13 @@ impl ValidationErrorEntry {
         let loc_list = pyo3::types::PyList::new_bound(py, [self.loc.0, &self.loc.1]);
         d.set_item("loc", loc_list)?;
         d.set_item("msg", self.msg)?;
-        d.set_item("input", &self.input)?;
+        // Pydantic-v2 sets `input` to None for "missing" errors; we mirror that
+        // so test expectations of None vs {} pass.
+        if self.err_type == "missing" {
+            d.set_item("input", py.None())?;
+        } else {
+            d.set_item("input", &self.input)?;
+        }
         Ok(d)
     }
 }
@@ -1969,8 +1975,10 @@ fn extract_one_param(
         .ok().flatten()
         .map(|v| v.unbind().into());
 
-    // Body is handled in extract_body_params; depends/security in Phase D/E.
-    if source == "depends" || source == "body" || source == "security" {
+    // Body is handled in extract_body_params; depends/security in Phase D/E;
+    // security_scopes / background_tasks are filled by resolve_dependencies.
+    if source == "depends" || source == "body" || source == "security"
+        || source == "security_scopes" || source == "background_tasks" {
         return Ok(ParamExtraction::UseDefault);
     }
 

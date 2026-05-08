@@ -319,6 +319,7 @@ def resolve_dependencies(
             cache[cid] = value
         return value, None
 
+    bg_tasks = None
     for entry in plan:
         if entry["source"] in ("depends", "security"):
             v, err = _resolve_dep(entry, parent_scopes=entry.get("scopes") or [])
@@ -329,6 +330,13 @@ def resolve_dependencies(
             # effects (auth checks, etc).
             if not entry.get("_internal"):
                 out[entry["name"]] = v
+        elif entry["source"] == "background_tasks":
+            from starlette.background import BackgroundTasks
+            if bg_tasks is None:
+                bg_tasks = BackgroundTasks()
+                from . import _bg as _bg_state
+                _bg_state._current_tasks = bg_tasks
+            out[entry["name"]] = bg_tasks
     return out, None
 
 
@@ -370,15 +378,12 @@ def _missing(source, name):
 
 
 def _httpexception_dict(exc):
-    """Convert an HTTPException (or generic Exception) into the error dict
-    expected by `resolve_dependencies` callers."""
-    status = getattr(exc, "status_code", None)
-    if status is None:
-        # Re-raise non-HTTP exceptions; they become 500 in the dispatch layer.
-        raise exc
-    detail = getattr(exc, "detail", str(exc))
-    headers = getattr(exc, "headers", None)
-    return {"status": status, "detail": detail, "headers": headers}
+    """Convert an HTTPException-like exception into the error dict consumed by
+    Rust dispatch. Phase F now re-raises HTTPException so the ASGI
+    ExceptionMiddleware can route to a user-registered exception handler.
+    Generic exceptions also propagate (becoming 500 via ServerErrorMiddleware).
+    """
+    raise exc
 
 
 def parse_form_body(body: bytes, content_type: str) -> dict[str, list[Any]]:
@@ -562,6 +567,20 @@ def _is_security_scopes_type(t: Any) -> bool:
     try:
         from .security import SecurityScopes
         return issubclass(t, SecurityScopes)
+    except Exception:
+        return False
+
+
+def _is_background_tasks_type(t: Any) -> bool:
+    """True if ``t`` is starlette's BackgroundTasks (which we re-export as
+    ``fastapi_rust.BackgroundTasks``). Matched by class identity rather than
+    name to avoid false positives.
+    """
+    if not isinstance(t, type):
+        return False
+    try:
+        from starlette.background import BackgroundTasks
+        return issubclass(t, BackgroundTasks)
     except Exception:
         return False
 
@@ -754,6 +773,23 @@ def compile_route_plan(handler: Any, path_template: str, _seen: set[int] | None 
             plan.append({
                 "name": name,
                 "source": "security_scopes",
+                "type": "any",
+                "default": None,
+                "alias": None,
+                "required": False,
+                "validators": {},
+                "convert_underscores": True,
+                "embed": False,
+                "media_type": "application/json",
+            })
+            continue
+
+        # Phase F: BackgroundTasks parameter — created fresh per request and
+        # stashed so the ASGI layer can drive it after the response body sends.
+        if _is_background_tasks_type(type_for_kind):
+            plan.append({
+                "name": name,
+                "source": "background_tasks",
                 "type": "any",
                 "default": None,
                 "alias": None,
