@@ -42,6 +42,27 @@ pub(crate) struct Route {
     pub response_model_exclude: Option<PyObject>,
     /// Route-level `dependencies=[Depends(...)]` — list of marker instances.
     pub dependencies: Vec<PyObject>,
+    /// Phase E: list of `(scheme_name, scopes, model_dict)` triples discovered
+    /// by walking the handler plan + route-level deps. Each model is the
+    /// scheme's OpenAPI dict (`type`/`scheme`/`flows`/...). Drives
+    /// `op["security"]` and `components.securitySchemes`.
+    pub security: Vec<SecurityEntry>,
+}
+
+pub(crate) struct SecurityEntry {
+    pub scheme_name: String,
+    pub scopes: Vec<String>,
+    pub model: PyObject,
+}
+
+impl SecurityEntry {
+    fn clone_ref(&self, py: Python<'_>) -> Self {
+        Self {
+            scheme_name: self.scheme_name.clone(),
+            scopes: self.scopes.clone(),
+            model: self.model.clone_ref(py),
+        }
+    }
 }
 
 /// Callable class returned by `app.get("/")` etc. Calling it with the user's
@@ -72,6 +93,7 @@ pub struct RouteDecorator {
 impl RouteDecorator {
     fn __call__(&self, py: Python<'_>, func: PyObject) -> PyResult<PyObject> {
         let plan = compile_route_plan(py, &func, &self.path).unwrap_or_default();
+        let security = extract_route_security(py, &plan, &self.dependencies).unwrap_or_default();
         self.routes.lock().push(Route {
             method: self.method.clone(),
             path: self.path.clone(),
@@ -92,9 +114,42 @@ impl RouteDecorator {
             response_model_include: self.response_model_include.as_ref().map(|p| p.clone_ref(py)),
             response_model_exclude: self.response_model_exclude.as_ref().map(|p| p.clone_ref(py)),
             dependencies: self.dependencies.iter().map(|p| p.clone_ref(py)).collect(),
+            security,
         });
         Ok(func)
     }
+}
+
+/// Phase E: extract per-route security info by calling
+/// `fastapi_rust._routing.extract_security_info(plan, route_deps)`. Returns
+/// list of `SecurityEntry` triples (scheme_name, scopes, model_dict).
+fn extract_route_security(
+    py: Python<'_>,
+    plan: &[PyObject],
+    deps: &[PyObject],
+) -> PyResult<Vec<SecurityEntry>> {
+    let routing = py.import_bound("fastapi_rust._routing")?;
+    let func = routing.getattr("extract_security_info")?;
+    let plan_list = pyo3::types::PyList::empty_bound(py);
+    for p in plan {
+        plan_list.append(p.clone_ref(py))?;
+    }
+    let deps_list = pyo3::types::PyList::empty_bound(py);
+    for d in deps {
+        deps_list.append(d.clone_ref(py))?;
+    }
+    let result = func.call1((plan_list, deps_list))?;
+    let list = result.downcast_into::<pyo3::types::PyList>()?;
+    let mut out = Vec::with_capacity(list.len());
+    for item in list.iter() {
+        let dict = item.downcast::<PyDict>()?;
+        let name: String = dict.get_item("scheme_name")?.unwrap().extract()?;
+        let scopes_obj = dict.get_item("scopes")?.unwrap();
+        let scopes: Vec<String> = scopes_obj.extract()?;
+        let model = dict.get_item("model")?.unwrap().unbind().into();
+        out.push(SecurityEntry { scheme_name: name, scopes, model });
+    }
+    Ok(out)
 }
 
 /// Inspect handler's Python signature via `fastapi_rust._routing.compile_route_plan`.
@@ -370,7 +425,7 @@ impl FastAPI {
                 response_model_exclude_defaults: false,
                 response_model_by_alias: true,
                 response_model_include: None,
-                response_model_exclude: None, dependencies: vec![],
+                response_model_exclude: None, dependencies: vec![], security: vec![],
             });
         }
         Ok(())
@@ -429,6 +484,7 @@ impl FastAPI {
                 response_model_by_alias: r.response_model_by_alias,
                 response_model_include: r.response_model_include.as_ref().map(|p| p.clone_ref(py)),
                 response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)), dependencies: r.dependencies.iter().map(|p| p.clone_ref(py)).collect(),
+                security: r.security.iter().map(|s| s.clone_ref(py)).collect(),
             });
         }
         Ok(())
@@ -445,10 +501,19 @@ impl FastAPI {
         if let Some(s) = self.summary.lock().clone() { info.set_item("summary", s)?; }
         if let Some(t) = self.terms_of_service.lock().clone() { info.set_item("termsOfService", t)?; }
         dict.set_item("info", info)?;
+        // Phase E: aggregate security schemes across all routes.
+        let security_schemes = PyDict::new_bound(py);
         // Build paths from registered routes (Phase H expands this).
         let paths_dict = PyDict::new_bound(py);
         for r in self.routes.lock().iter() {
             if !r.include_in_schema || r.method == "WEBSOCKET" { continue; }
+            // Register every scheme this route depends on into the global
+            // securitySchemes dict (first occurrence wins).
+            for s in &r.security {
+                if security_schemes.get_item(&s.scheme_name)?.is_none() {
+                    security_schemes.set_item(&s.scheme_name, s.model.clone_ref(py))?;
+                }
+            }
             let path_item = paths_dict
                 .get_item(&r.path)?
                 .map(|v| v.downcast_into::<PyDict>().ok())
@@ -470,12 +535,25 @@ impl FastAPI {
             resp.set_item("description", "Successful Response")?;
             responses.set_item(status_str, resp)?;
             op.set_item("responses", responses)?;
+            // Phase E: per-route security array — list of {scheme_name: scopes}.
+            if !r.security.is_empty() {
+                let security_list = pyo3::types::PyList::empty_bound(py);
+                for s in &r.security {
+                    let entry = PyDict::new_bound(py);
+                    entry.set_item(&s.scheme_name, s.scopes.clone())?;
+                    security_list.append(entry)?;
+                }
+                op.set_item("security", security_list)?;
+            }
             path_item.set_item(r.method.to_lowercase(), op)?;
             paths_dict.set_item(&r.path, path_item)?;
         }
         dict.set_item("paths", paths_dict)?;
         let components = PyDict::new_bound(py);
         components.set_item("schemas", PyDict::new_bound(py))?;
+        if !security_schemes.is_empty() {
+            components.set_item("securitySchemes", security_schemes)?;
+        }
         dict.set_item("components", components)?;
         Ok(dict.unbind().into())
     }
@@ -668,15 +746,37 @@ impl FastAPI {
         // ---- Form / multipart parsing (lazy: only if any form/file param) -
         // We grab Content-Type from header_lookup so we can dispatch between
         // urlencoded and multipart in Python.
-        let needs_form = param_plan.iter().any(|p| {
-            let dict = match p.bind(py).downcast::<PyDict>() {
+        // Phase E: a class-as-Depends (e.g. OAuth2PasswordRequestForm) places
+        // its Form fields inside the dep_plan, so we must walk recursively.
+        fn plan_has_form(py: Python<'_>, plan_obj: &PyObject) -> bool {
+            let dict = match plan_obj.bind(py).downcast::<PyDict>() {
                 Ok(d) => d.clone(),
                 Err(_) => return false,
             };
             let s: String = dict.get_item("source").ok().flatten()
                 .and_then(|v| v.extract().ok()).unwrap_or_default();
-            s == "form" || s == "file"
+            if s == "form" || s == "file" { return true; }
+            if s == "depends" || s == "security" {
+                if let Ok(Some(sub)) = dict.get_item("dep_plan") {
+                    if let Ok(list) = sub.downcast::<pyo3::types::PyList>() {
+                        for item in list.iter() {
+                            let obj: PyObject = item.unbind().into();
+                            if plan_has_form(py, &obj) { return true; }
+                        }
+                    }
+                }
+            }
+            false
+        }
+        let route_deps_have_form = route_deps_markers.iter().any(|m| {
+            // Route-level Depends(): peek at the marker's dependency callable's
+            // signature for Form params. Cheaper to just always parse on a
+            // form-shaped Content-Type — but here we keep behaviour scoped.
+            let _ = m; // markers are opaque from Rust; default to false.
+            false
         });
+        let _ = route_deps_have_form;
+        let needs_form = param_plan.iter().any(|p| plan_has_form(py, p));
         let form_dict: Bound<'_, PyDict> = if needs_form {
             let body_bytes_for_form: Vec<u8> = body
                 .map(|b| b.as_bytes().to_vec())
@@ -1057,6 +1157,7 @@ impl APIRouter {
                 response_model_by_alias: r.response_model_by_alias,
                 response_model_include: r.response_model_include.as_ref().map(|p| p.clone_ref(py)),
                 response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)), dependencies: r.dependencies.iter().map(|p| p.clone_ref(py)).collect(),
+                security: r.security.iter().map(|s| s.clone_ref(py)).collect(),
             });
         }
         Ok(())
@@ -1129,7 +1230,7 @@ impl ApiRouteDecorator {
                 response_model_exclude_defaults: false,
                 response_model_by_alias: true,
                 response_model_include: None,
-                response_model_exclude: None, dependencies: vec![],
+                response_model_exclude: None, dependencies: vec![], security: vec![],
             });
         }
         Ok(func)

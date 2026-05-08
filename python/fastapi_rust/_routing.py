@@ -94,11 +94,66 @@ def call_with_async_handling(callable_, kwargs):
     return result
 
 
+def extract_security_info(
+    plan: list[dict[str, Any]],
+    route_deps_markers: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Walk a route's plan (including nested dep_plans) and collect every
+    security-class entry that contributes to the route's OpenAPI security
+    requirement.
+
+    Returns a list of dicts in registration order:
+        [{"scheme_name": str, "scopes": list[str], "model": dict}, ...]
+
+    Scopes carried by an outer ``Security(callable, scopes=[...])`` propagate
+    as ambient scopes into the dep's sub-plan, so when an inner Depends(oauth2)
+    is hit, the recorded scope list reflects the outer Security's scopes.
+
+    Optional ``route_deps_markers``: route-level ``dependencies=[Depends(...)]``
+    markers from the decorator. They are expanded into synthetic plan entries
+    and walked together with the handler plan, so ``Security(check_dep,
+    scopes=["read:items"])`` on the route surfaces in OpenAPI.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if route_deps_markers:
+        synthetic = expand_route_level_dependencies(route_deps_markers)
+        all_entries = list(synthetic) + list(plan)
+    else:
+        all_entries = list(plan)
+
+    def walk(entries: list[dict[str, Any]], ambient: list[str]) -> None:
+        for e in entries:
+            if e.get("source") not in ("depends", "security"):
+                continue
+            own_scopes = list(e.get("scopes") or [])
+            if e.get("security_class"):
+                name = e.get("scheme_name") or type(e["dep_callable"]).__name__
+                if name not in seen:
+                    seen.add(name)
+                    model = getattr(e["dep_callable"], "model", {}) or {}
+                    out.append({
+                        "scheme_name": name,
+                        "scopes": list(ambient),
+                        "model": model,
+                    })
+                continue
+            sub_ambient = own_scopes if own_scopes else ambient
+            walk(e.get("dep_plan", []) or [], sub_ambient)
+
+    walk(all_entries, [])
+    return out
+
+
 def expand_route_level_dependencies(deps_markers):
     """Convert a `dependencies=[Depends(...), ...]` list of markers into
     synthetic plan entries that can be appended to a route's plan. Each entry
     has source=depends + dep_callable + dep_plan. The result is consumed by
     resolver before the regular handler params.
+
+    Phase E: each marker may also be a Security() with scopes=[...]; the
+    scopes are stored on the entry and propagated as parent_scopes to the
+    inner SecurityScopes parameter at resolution time.
     """
     out = []
     for i, marker in enumerate(deps_markers):
@@ -106,16 +161,21 @@ def expand_route_level_dependencies(deps_markers):
         if dep is None:
             continue
         cid = id(dep)
-        try:
-            sub_plan = compile_route_plan(dep, "")
-        except Exception:
-            sub_plan = []
+        is_security_class = bool(getattr(dep, "is_security_scheme", False))
+        if is_security_class:
+            sub_plan = []  # Security classes don't run a sub-plan; we call _extract.
+        else:
+            try:
+                sub_plan = compile_route_plan(dep, "")
+            except Exception:
+                sub_plan = []
         import inspect as _ins
         is_async = _ins.iscoroutinefunction(dep) or (
             not _ins.isclass(dep)
             and hasattr(dep, "__call__")
             and _ins.iscoroutinefunction(dep.__call__)
         )
+        scopes = list(getattr(marker, "scopes", []) or [])
         out.append({
             "name": f"_internal_dep_{i}_{cid}",
             "source": "depends",
@@ -132,6 +192,9 @@ def expand_route_level_dependencies(deps_markers):
             "use_cache": getattr(marker, "use_cache", True) if marker is not None else True,
             "is_async": is_async,
             "_internal": True,
+            "scopes": scopes,
+            "security_class": is_security_class,
+            "scheme_name": getattr(dep, "scheme_name", None) if is_security_class else None,
         })
     return out
 
@@ -156,6 +219,11 @@ def resolve_dependencies(
     dep callable to its replacement.
 
     Per-request cache: keyed by `id(callable)` after override resolution.
+
+    Phase E: when an entry's ``security_class=True``, we invoke
+    ``dep_callable._extract(headers, query, cookies)`` directly. Otherwise we
+    walk the sub-plan; ``security_scopes`` sub-entries are filled with the
+    outer (parent) Security wrapper's scopes.
     """
     cache: dict[int, Any] = {}
     out: dict[str, Any] = {}
@@ -205,7 +273,7 @@ def resolve_dependencies(
             return [_cast(v, inner, source, name, validators) for v in vals], None
         return _cast(vals[0], type_kind, source, name, validators), None
 
-    def _resolve_dep(entry):
+    def _resolve_dep(entry, parent_scopes=None):
         callable_ = entry["dep_callable"]
         # dependency_overrides lookup
         if overrides and callable_ in overrides:
@@ -215,10 +283,25 @@ def resolve_dependencies(
         if use_cache and cid in cache:
             return cache[cid], None
 
+        # Security classes: fast-path, bypass sub-plan walk.
+        if entry.get("security_class"):
+            try:
+                value = callable_._extract(header_lookup, query_dict, cookie_dict)
+            except Exception as e:
+                return None, _httpexception_dict(e)
+            if use_cache:
+                cache[cid] = value
+            return value, None
+
+        own_scopes = entry.get("scopes") or parent_scopes or []
         sub_kwargs: dict[str, Any] = {}
         for sub_entry in entry.get("dep_plan", []):
-            if sub_entry["source"] in ("depends", "security"):
-                v, err = _resolve_dep(sub_entry)
+            if sub_entry["source"] == "security_scopes":
+                from .security import SecurityScopes
+                sub_kwargs[sub_entry["name"]] = SecurityScopes(scopes=list(own_scopes))
+            elif sub_entry["source"] in ("depends", "security"):
+                # Pass own_scopes as parent for inner security_scopes consumers.
+                v, err = _resolve_dep(sub_entry, parent_scopes=own_scopes)
                 if err:
                     return None, err
                 sub_kwargs[sub_entry["name"]] = v
@@ -238,7 +321,7 @@ def resolve_dependencies(
 
     for entry in plan:
         if entry["source"] in ("depends", "security"):
-            v, err = _resolve_dep(entry)
+            v, err = _resolve_dep(entry, parent_scopes=entry.get("scopes") or [])
             if err:
                 return out, err
             # _internal entries (route/router/app-level dependencies=[]) don't
@@ -468,6 +551,21 @@ def _is_pydantic_model(t: Any) -> bool:
         return False
 
 
+def _is_security_scopes_type(t: Any) -> bool:
+    """True if `t` is the SecurityScopes class. We name-check first to avoid
+    importing fastapi_rust.security during compile of fastapi_rust itself.
+    """
+    if not isinstance(t, type):
+        return False
+    if t.__name__ != "SecurityScopes":
+        return False
+    try:
+        from .security import SecurityScopes
+        return issubclass(t, SecurityScopes)
+    except Exception:
+        return False
+
+
 def _type_kind(t: Any) -> str:
     """Map a Python type to our kind string. Returns "any" for unrecognized.
 
@@ -649,6 +747,24 @@ def compile_route_plan(handler: Any, path_template: str, _seen: set[int] | None 
         inner_ann, metadata = _unwrap_annotated(ann)
         # Optional -> mark required=False, peel one layer
         type_for_kind, optional = _unwrap_optional(inner_ann)
+
+        # Phase E: SecurityScopes parameters are filled by the resolver from
+        # the wrapping Security() call; they don't extract from the request.
+        if _is_security_scopes_type(type_for_kind):
+            plan.append({
+                "name": name,
+                "source": "security_scopes",
+                "type": "any",
+                "default": None,
+                "alias": None,
+                "required": False,
+                "validators": {},
+                "convert_underscores": True,
+                "embed": False,
+                "media_type": "application/json",
+            })
+            continue
+
         type_kind = _type_kind(type_for_kind)
         model_class = _resolve_model_class(type_for_kind)
 
@@ -677,6 +793,10 @@ def compile_route_plan(handler: Any, path_template: str, _seen: set[int] | None 
                          "File", "Depends", "Security"):
                 if _is_marker(default, kind):
                     source = kind.lower()
+                    if kind in ("Depends", "Security"):
+                        # Don't unwrap — Depends/Security carry a callable,
+                        # not a scalar default. The marker is consumed below.
+                        break
                     marker_kwargs = _extract_marker_kwargs(default)
                     inner_default = getattr(default, "default", None)
                     has_default = inner_default is not None
@@ -745,30 +865,42 @@ def compile_route_plan(handler: Any, path_template: str, _seen: set[int] | None 
             if dep_callable is None:
                 # Couldn't figure out the dependency — skip; handler default kicks in.
                 continue
-            # Detect cycles by id(callable).
-            cid = id(dep_callable)
-            if cid in _seen:
-                # Cycle: leave sub_plan empty, let runtime fail explicitly.
+            # Phase E: security class instances bypass sub-plan walk; their
+            # ``_extract`` reads headers/query/cookies directly.
+            is_security_class = bool(getattr(dep_callable, "is_security_scheme", False))
+            if is_security_class:
                 entry["dep_plan"] = []
+                entry["security_class"] = True
+                entry["scheme_name"] = getattr(dep_callable, "scheme_name", None)
             else:
-                _seen.add(cid)
-                try:
-                    entry["dep_plan"] = compile_route_plan(dep_callable, "", _seen)
-                except Exception:
+                # Detect cycles by id(callable).
+                cid = id(dep_callable)
+                if cid in _seen:
                     entry["dep_plan"] = []
-                _seen.discard(cid)
+                else:
+                    _seen.add(cid)
+                    try:
+                        entry["dep_plan"] = compile_route_plan(dep_callable, "", _seen)
+                    except Exception:
+                        entry["dep_plan"] = []
+                    _seen.discard(cid)
             entry["dep_callable"] = dep_callable
             # Pull use_cache from marker (defaults True). Either marker source
             # may carry it; we prefer Annotated marker over default-as-marker.
             uc = True
+            scopes: list[str] = []
             for src in (meta_marker, default):
                 if src is None:
                     continue
                 v = getattr(src, "use_cache", None)
                 if v is not None:
                     uc = bool(v)
-                    break
+                # Pull scopes from Security marker.
+                s = getattr(src, "scopes", None)
+                if s and not scopes:
+                    scopes = list(s)
             entry["use_cache"] = uc
+            entry["scopes"] = scopes
             # async detection
             import inspect as _ins
             entry["is_async"] = _ins.iscoroutinefunction(dep_callable) or (
