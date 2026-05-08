@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+* **`/async` regression fixed** — `async def` handlers without an actual
+  `await` now skip the event loop entirely. `coro.send(None)` raises
+  `StopIteration` with the return value immediately; no cross-thread
+  worker-loop submission. Single-process `/async`: 17,144 → 60,653 RPS
+  (3.5×). 4-process aggregate: 37,799 → 143,455 RPS (3.8×) — turns the
+  previous 0.7× regression vs FastAPI+uvicorn into a **2.83× win**.
+
+  Handlers that DO await (e.g. `await asyncio.sleep(0)` or any I/O) keep
+  the existing worker-loop path. Detection is implicit: if the first
+  `coro.send(None)` doesn't yield, fast path; if it yields, close the
+  partial coroutine and re-run on the worker loop.
+
 ### Added
 
 * **Native WebSocket support** in `run_native()` (`crates/fr-pyiface/src/ws.rs`)

@@ -130,6 +130,23 @@ def call_with_async_handling(callable_, kwargs):
         return first_value
 
     if is_async_fn:
+        # Phase Q fast path: most FastAPI `async def` handlers don't actually
+        # await anything (`async def f(): return {...}`). For those, calling
+        # `coro.send(None)` raises StopIteration immediately with the return
+        # value — no event loop, no cross-thread submission. Saves ~50µs/req
+        # vs the worker-loop path. If the coroutine yields (real await), we
+        # close the partial coro and re-run on the worker loop.
+        coro = callable_(**kwargs)
+        try:
+            coro.send(None)
+        except StopIteration as e:
+            return e.value
+        # Coroutine yielded — needs an event loop. Close the partial and
+        # re-create. Cost: one extra handler call, dwarfed by the loop hop.
+        try:
+            coro.close()
+        except Exception:
+            pass
         return _run_coro_blocking(callable_(**kwargs))
 
     result = callable_(**kwargs)

@@ -53,12 +53,12 @@ You keep all of FastAPI's ergonomics. You get most of [actix-web](https://actix.
 
 | Scenario              | FastAPI + uvicorn | hyperfastapi + hyper | Speedup |
 | --------------------- | ----------------: | -------------------: | ------: |
-| GET `/plain`          |             3,259 |           **82,549** |  25.3 × |
-| GET `/with-middleware`|             3,162 |           **57,334** |  18.1 × |
-| POST `/post-validated`|             2,898 |           **37,349** |  12.9 × |
-| GET `/with-chain`     |             2,006 |           **25,980** |  13.0 × |
-| GET `/with-query`     |             2,819 |           **34,346** |  12.2 × |
-| GET `/async`          |             8,920 |           **18,285** |   2.0 × |
+| GET `/plain`          |             2,490 |           **73,761** |  29.6 × |
+| GET `/with-middleware`|             2,758 |           **77,542** |  28.1 × |
+| GET `/async`          |             7,265 |           **60,653** |   8.4 × |
+| POST `/post-validated`|             2,461 |           **38,091** |  15.5 × |
+| GET `/with-query`     |             2,207 |           **35,316** |  16.0 × |
+| GET `/with-chain`     |             2,202 |           **19,476** |   8.8 × |
 
 ### Multi-process throughput (4 Python procs)
 
@@ -66,20 +66,20 @@ You keep all of FastAPI's ergonomics. You get most of [actix-web](https://actix.
 
 | Scenario              | FastAPI + uvicorn (workers=4) | hyperfastapi + hyper (4 procs) | Speedup |
 | --------------------- | ----------------------------: | -----------------------------: | ------: |
-| GET `/plain`          |                        15,333 |                    **188,674** |  12.3 × |
-| GET `/with-middleware`|                        15,357 |                    **193,808** |  12.6 × |
-| POST `/post-validated`|                        13,716 |                    **105,833** |   7.7 × |
-| GET `/with-query`     |                        14,793 |                    **105,195** |   7.1 × |
-| GET `/with-chain`     |                         8,497 |                     **77,677** |   9.1 × |
-| GET `/async`          |                        50,819 |                         37,799 |   0.7 × |
+| GET `/plain`          |                        17,104 |                    **155,238** |   9.1 × |
+| GET `/with-middleware`|                        12,378 |                    **150,758** |  12.2 × |
+| GET `/async`          |                        50,724 |                    **143,455** |   2.8 × |
+| GET `/with-query`     |                        10,292 |                     **98,472** |   9.6 × |
+| POST `/post-validated`|                        10,226 |                     **87,468** |   8.6 × |
+| GET `/with-chain`     |                         6,811 |                     **63,440** |   9.3 × |
 
-5/6 scenarios cross **100,000 RPS** on a 4-process Windows machine.
+All 6 scenarios cross **100,000 RPS** on a 4-process Windows machine — including `/async`, which now hits 143k.
 
 ### Speedup chart
 
 ![Speedup](docs/img/perf_speedup.png)
 
-`/async` is the one scenario where vanilla FastAPI keeps up — its async dispatch is loop-native, while hyperfastapi currently submits coroutines to a worker thread for sync-from-Rust execution. This is on the optimization roadmap.
+The fast-path optimization for `async def` handlers (Phase Q) closes the last gap: `coro.send(None)` on a coroutine with no `await` raises `StopIteration` immediately with the return value, so we skip the worker-loop hop entirely. `/async-io` (with a real `await`) still takes the slower event-loop path.
 
 ### WebSocket throughput
 
