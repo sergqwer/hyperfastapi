@@ -1024,12 +1024,14 @@ impl FastAPI {
             }
         }
 
-        // Call the handler with extracted kwargs.
-        let result = if kwargs.is_empty() {
-            handler.call0(py)?
-        } else {
-            handler.call_bound(py, (), Some(&kwargs))?
-        };
+        // Call the handler with extracted kwargs. If the handler is async,
+        // call_with_async_handling drives the coroutine to completion via a
+        // helper thread + new event loop so dispatch stays sync from Rust's
+        // perspective. (Phase J target: lift this into a true async dispatch
+        // path so we don't pay the thread-spawn cost per async request.)
+        let routing_mod = py.import_bound("fastapi_rust._routing")?;
+        let async_caller = routing_mod.getattr("call_with_async_handling")?;
+        let result = async_caller.call1((handler.bind(py), &kwargs))?.unbind();
         let is_head = method == "HEAD";
 
         // Detect Starlette Response — handler returned a fully-formed response.

@@ -35,6 +35,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.types import Receive, Scope, Send
 
 from ._core import FastAPI as _RustFastAPI
+from . import _bg as _bg_state
 from .exceptions import HTTPException, RequestValidationError
 
 
@@ -447,21 +448,20 @@ class FastAPI(_RustFastAPI):
         ``raw_response`` is not None, the ASGI layer drives it directly; when
         it is None, the ``status/headers/body`` triple is sent as-is.
         """
-        from . import _bg as bg_state
-        bg_state._current_tasks = None
-        bg_state._current_request = request
-        bg_state._current_raw_response = None
+        _bg_state._current_tasks = None
+        _bg_state._current_request = request
+        _bg_state._current_raw_response = None
         try:
             status, headers, response_body = self._dispatch(
                 method, path, query_string, headers_list, body
             )
-            tasks = bg_state._current_tasks
-            raw_resp = bg_state._current_raw_response
+            tasks = _bg_state._current_tasks
+            raw_resp = _bg_state._current_raw_response
             return status, headers, response_body, tasks, raw_resp
         finally:
-            bg_state._current_tasks = None
-            bg_state._current_request = None
-            bg_state._current_raw_response = None
+            _bg_state._current_tasks = None
+            _bg_state._current_request = None
+            _bg_state._current_raw_response = None
 
 
 __all__ = ["FastAPI"]

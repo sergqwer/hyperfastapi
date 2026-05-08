@@ -38,37 +38,62 @@ from uuid import UUID
 _PATH_PARAM_RE = re.compile(r"\{([^}:]+)(?::[^}]+)?\}")
 
 
+_WORKER_LOOP = None
+_WORKER_LOOP_LOCK = None
+
+
+def _ensure_worker_loop():
+    """Lazily start a single dedicated daemon thread running an asyncio event
+    loop. All async coroutines submitted from sync dispatch land on this loop
+    via run_coroutine_threadsafe. Persistent thread + persistent loop avoids
+    paying the spawn-thread + create-loop cost per request — that was Phase J's
+    biggest single async-handler perf hit (5x slowdown vs sync at ~2k RPS).
+    """
+    global _WORKER_LOOP, _WORKER_LOOP_LOCK
+    if _WORKER_LOOP is not None:
+        return _WORKER_LOOP
+
+    import asyncio
+    import threading
+
+    if _WORKER_LOOP_LOCK is None:
+        _WORKER_LOOP_LOCK = threading.Lock()
+    with _WORKER_LOOP_LOCK:
+        if _WORKER_LOOP is not None:
+            return _WORKER_LOOP
+        loop = asyncio.new_event_loop()
+        ready = threading.Event()
+
+        def runner() -> None:
+            asyncio.set_event_loop(loop)
+            ready.set()
+            try:
+                loop.run_forever()
+            finally:
+                loop.close()
+
+        t = threading.Thread(target=runner, name="fastapi_rust-async-worker", daemon=True)
+        t.start()
+        ready.wait()
+        _WORKER_LOOP = loop
+    return _WORKER_LOOP
+
+
 def _run_coro_blocking(coro):
     """Run a coroutine to completion from a sync context that may itself be
     running inside an event loop (e.g. Starlette TestClient).
 
-    `asgiref.sync.async_to_sync` raises RuntimeError if called from a thread
-    that has an active loop. The robust workaround is to spawn a fresh thread,
-    create a new event loop there, and block on it.
-
-    Phase J replaces this with a true async dispatch path through
-    applications.py.
+    Submits to a long-lived worker loop running on a dedicated daemon thread,
+    then blocks the caller on the resulting Future. This is correct from any
+    thread (calling thread's running loop, if any, is irrelevant — the
+    coroutine runs on the worker loop) and avoids the per-request spawn cost
+    of the previous fresh-thread implementation.
     """
     import asyncio
-    import threading
 
-    holder: dict[str, Any] = {}
-
-    def runner() -> None:
-        loop = asyncio.new_event_loop()
-        try:
-            holder["v"] = loop.run_until_complete(coro)
-        except BaseException as e:
-            holder["e"] = e
-        finally:
-            loop.close()
-
-    t = threading.Thread(target=runner)
-    t.start()
-    t.join()
-    if "e" in holder:
-        raise holder["e"]
-    return holder["v"]
+    loop = _ensure_worker_loop()
+    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    return fut.result()
 
 
 def call_with_async_handling(callable_, kwargs):
