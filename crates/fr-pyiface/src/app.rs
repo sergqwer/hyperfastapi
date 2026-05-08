@@ -112,19 +112,24 @@ impl RouteDecorator {
                 let typing = py.import_bound("typing")?;
                 let get_hints = typing.getattr("get_type_hints")?;
                 if let Ok(hints) = get_hints.call1((func.bind(py),)) {
-                    if let Ok(Some(ret_ann)) = hints.downcast::<PyDict>()
+                    if let Ok(Some(ret_ann)) = hints
+                        .downcast::<PyDict>()
                         .map(|d| d.get_item("return").ok().flatten())
                     {
                         let is_none_type = ret_ann.is_none()
                             || ret_ann.eq(py.None().into_bound(py))?
-                            || ret_ann.repr().map(|r| {
-                                let s = r.to_string();
-                                s == "<class 'NoneType'>" || s == "None"
-                            }).unwrap_or(false);
+                            || ret_ann
+                                .repr()
+                                .map(|r| {
+                                    let s = r.to_string();
+                                    s == "<class 'NoneType'>" || s == "None"
+                                })
+                                .unwrap_or(false);
                         if !is_none_type {
-                            return Err(pyo3::exceptions::PyAssertionError::new_err(
-                                format!("Status code {} must not have a non-None return annotation", sc),
-                            ));
+                            return Err(pyo3::exceptions::PyAssertionError::new_err(format!(
+                                "Status code {} must not have a non-None return annotation",
+                                sc
+                            )));
                         }
                     }
                 }
@@ -150,8 +155,14 @@ impl RouteDecorator {
             response_model_exclude_none: self.response_model_exclude_none,
             response_model_exclude_defaults: self.response_model_exclude_defaults,
             response_model_by_alias: self.response_model_by_alias,
-            response_model_include: self.response_model_include.as_ref().map(|p| p.clone_ref(py)),
-            response_model_exclude: self.response_model_exclude.as_ref().map(|p| p.clone_ref(py)),
+            response_model_include: self
+                .response_model_include
+                .as_ref()
+                .map(|p| p.clone_ref(py)),
+            response_model_exclude: self
+                .response_model_exclude
+                .as_ref()
+                .map(|p| p.clone_ref(py)),
             dependencies: self.dependencies.iter().map(|p| p.clone_ref(py)).collect(),
             operation_id: self.operation_id.clone(),
             responses: self.responses.as_ref().map(|p| p.clone_ref(py)),
@@ -207,7 +218,11 @@ fn extract_route_security(
         let scopes_obj = dict.get_item("scopes")?.unwrap();
         let scopes: Vec<String> = scopes_obj.extract()?;
         let model = dict.get_item("model")?.unwrap().unbind().into();
-        out.push(SecurityEntry { scheme_name: name, scopes, model });
+        out.push(SecurityEntry {
+            scheme_name: name,
+            scopes,
+            model,
+        });
     }
     Ok(out)
 }
@@ -218,7 +233,10 @@ fn get_cached_bg_module(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyMod
     use once_cell::sync::OnceCell;
     static CACHE: OnceCell<PyObject> = OnceCell::new();
     if let Some(obj) = CACHE.get() {
-        return Ok(obj.bind(py).clone().downcast_into::<pyo3::types::PyModule>()
+        return Ok(obj
+            .bind(py)
+            .clone()
+            .downcast_into::<pyo3::types::PyModule>()
             .expect("cached _bg is a module"));
     }
     let m = py.import_bound("hyperfastapi._bg")?;
@@ -240,17 +258,26 @@ fn detect_handler_is_async(py: Python<'_>, handler: &PyObject) -> bool {
     let h = handler.bind(py);
     // Treat anything generator-flavored as needing the slow path.
     if let Some(f) = is_async_gen {
-        if f.call1((h,)).and_then(|r| r.extract::<bool>()).unwrap_or(false) {
+        if f.call1((h,))
+            .and_then(|r| r.extract::<bool>())
+            .unwrap_or(false)
+        {
             return false;
         }
     }
     if let Some(f) = is_gen {
-        if f.call1((h,)).and_then(|r| r.extract::<bool>()).unwrap_or(false) {
+        if f.call1((h,))
+            .and_then(|r| r.extract::<bool>())
+            .unwrap_or(false)
+        {
             return false;
         }
     }
     if let Some(f) = is_coro {
-        if f.call1((h,)).and_then(|r| r.extract::<bool>()).unwrap_or(false) {
+        if f.call1((h,))
+            .and_then(|r| r.extract::<bool>())
+            .unwrap_or(false)
+        {
             return true;
         }
     }
@@ -260,11 +287,7 @@ fn detect_handler_is_async(py: Python<'_>, handler: &PyObject) -> bool {
 /// Inspect handler's Python signature via `hyperfastapi._routing.compile_route_plan`.
 /// Each entry is a Python dict; we keep it as PyObject and extract fields at
 /// dispatch time (Phase J can pre-parse if profiling shows it matters).
-fn compile_route_plan(
-    py: Python<'_>,
-    handler: &PyObject,
-    path: &str,
-) -> PyResult<Vec<PyObject>> {
+fn compile_route_plan(py: Python<'_>, handler: &PyObject, path: &str) -> PyResult<Vec<PyObject>> {
     let routing_mod = py.import_bound("hyperfastapi._routing")?;
     let compiler = routing_mod.getattr("compile_route_plan")?;
     let result = compiler.call1((handler.clone_ref(py), path))?;
@@ -362,25 +385,45 @@ impl FastAPI {
     // ---- Attributes ------------------------------------------------------
 
     #[getter]
-    fn title(&self) -> String { self.title.lock().clone() }
+    fn title(&self) -> String {
+        self.title.lock().clone()
+    }
     #[getter]
-    fn version(&self) -> String { self.version.lock().clone() }
+    fn version(&self) -> String {
+        self.version.lock().clone()
+    }
     #[getter]
-    fn description(&self) -> String { self.description.lock().clone() }
+    fn description(&self) -> String {
+        self.description.lock().clone()
+    }
     #[getter]
-    fn summary(&self) -> Option<String> { self.summary.lock().clone() }
+    fn summary(&self) -> Option<String> {
+        self.summary.lock().clone()
+    }
     #[getter]
-    fn debug(&self) -> bool { *self.debug.lock() }
+    fn debug(&self) -> bool {
+        *self.debug.lock()
+    }
     #[getter]
-    fn root_path(&self) -> String { self.root_path.lock().clone() }
+    fn root_path(&self) -> String {
+        self.root_path.lock().clone()
+    }
     #[getter]
-    fn terms_of_service(&self) -> Option<String> { self.terms_of_service.lock().clone() }
+    fn terms_of_service(&self) -> Option<String> {
+        self.terms_of_service.lock().clone()
+    }
     #[getter]
-    fn docs_url(&self) -> Option<String> { self.docs_url.lock().clone() }
+    fn docs_url(&self) -> Option<String> {
+        self.docs_url.lock().clone()
+    }
     #[getter]
-    fn redoc_url(&self) -> Option<String> { self.redoc_url.lock().clone() }
+    fn redoc_url(&self) -> Option<String> {
+        self.redoc_url.lock().clone()
+    }
     #[getter]
-    fn openapi_url(&self) -> Option<String> { self.openapi_url.lock().clone() }
+    fn openapi_url(&self) -> Option<String> {
+        self.openapi_url.lock().clone()
+    }
 
     #[getter]
     fn dependency_overrides(&self, py: Python<'_>) -> PyObject {
@@ -414,55 +457,380 @@ impl FastAPI {
 
     #[pyo3(signature = (path, *, status_code = None, tags = None, deprecated = false, include_in_schema = true, summary = None, description = None, response_model = None, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn get(&self, path: String, status_code: Option<i32>, tags: Option<Vec<String>>, deprecated: bool, include_in_schema: bool, summary: Option<String>, description: Option<String>, response_model: Option<PyObject>, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "GET", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn get(
+        &self,
+        path: String,
+        status_code: Option<i32>,
+        tags: Option<Vec<String>>,
+        deprecated: bool,
+        include_in_schema: bool,
+        summary: Option<String>,
+        description: Option<String>,
+        response_model: Option<PyObject>,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "GET",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     #[pyo3(signature = (path, *, status_code = None, tags = None, deprecated = false, include_in_schema = true, summary = None, description = None, response_model = None, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn post(&self, path: String, status_code: Option<i32>, tags: Option<Vec<String>>, deprecated: bool, include_in_schema: bool, summary: Option<String>, description: Option<String>, response_model: Option<PyObject>, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "POST", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn post(
+        &self,
+        path: String,
+        status_code: Option<i32>,
+        tags: Option<Vec<String>>,
+        deprecated: bool,
+        include_in_schema: bool,
+        summary: Option<String>,
+        description: Option<String>,
+        response_model: Option<PyObject>,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "POST",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     #[pyo3(signature = (path, *, status_code = None, tags = None, deprecated = false, include_in_schema = true, summary = None, description = None, response_model = None, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn put(&self, path: String, status_code: Option<i32>, tags: Option<Vec<String>>, deprecated: bool, include_in_schema: bool, summary: Option<String>, description: Option<String>, response_model: Option<PyObject>, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "PUT", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn put(
+        &self,
+        path: String,
+        status_code: Option<i32>,
+        tags: Option<Vec<String>>,
+        deprecated: bool,
+        include_in_schema: bool,
+        summary: Option<String>,
+        description: Option<String>,
+        response_model: Option<PyObject>,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "PUT",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     #[pyo3(signature = (path, *, status_code = None, tags = None, deprecated = false, include_in_schema = true, summary = None, description = None, response_model = None, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn delete(&self, path: String, status_code: Option<i32>, tags: Option<Vec<String>>, deprecated: bool, include_in_schema: bool, summary: Option<String>, description: Option<String>, response_model: Option<PyObject>, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "DELETE", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn delete(
+        &self,
+        path: String,
+        status_code: Option<i32>,
+        tags: Option<Vec<String>>,
+        deprecated: bool,
+        include_in_schema: bool,
+        summary: Option<String>,
+        description: Option<String>,
+        response_model: Option<PyObject>,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "DELETE",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     #[pyo3(signature = (path, *, status_code = None, tags = None, deprecated = false, include_in_schema = true, summary = None, description = None, response_model = None, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn patch(&self, path: String, status_code: Option<i32>, tags: Option<Vec<String>>, deprecated: bool, include_in_schema: bool, summary: Option<String>, description: Option<String>, response_model: Option<PyObject>, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "PATCH", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn patch(
+        &self,
+        path: String,
+        status_code: Option<i32>,
+        tags: Option<Vec<String>>,
+        deprecated: bool,
+        include_in_schema: bool,
+        summary: Option<String>,
+        description: Option<String>,
+        response_model: Option<PyObject>,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "PATCH",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     #[pyo3(signature = (path, *, status_code = None, tags = None, deprecated = false, include_in_schema = true, summary = None, description = None, response_model = None, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn options(&self, path: String, status_code: Option<i32>, tags: Option<Vec<String>>, deprecated: bool, include_in_schema: bool, summary: Option<String>, description: Option<String>, response_model: Option<PyObject>, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "OPTIONS", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn options(
+        &self,
+        path: String,
+        status_code: Option<i32>,
+        tags: Option<Vec<String>>,
+        deprecated: bool,
+        include_in_schema: bool,
+        summary: Option<String>,
+        description: Option<String>,
+        response_model: Option<PyObject>,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "OPTIONS",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     #[pyo3(signature = (path, *, status_code = None, tags = None, deprecated = false, include_in_schema = true, summary = None, description = None, response_model = None, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn head(&self, path: String, status_code: Option<i32>, tags: Option<Vec<String>>, deprecated: bool, include_in_schema: bool, summary: Option<String>, description: Option<String>, response_model: Option<PyObject>, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "HEAD", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn head(
+        &self,
+        path: String,
+        status_code: Option<i32>,
+        tags: Option<Vec<String>>,
+        deprecated: bool,
+        include_in_schema: bool,
+        summary: Option<String>,
+        description: Option<String>,
+        response_model: Option<PyObject>,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "HEAD",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     #[pyo3(signature = (path, *, status_code = None, tags = None, deprecated = false, include_in_schema = true, summary = None, description = None, response_model = None, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn trace(&self, path: String, status_code: Option<i32>, tags: Option<Vec<String>>, deprecated: bool, include_in_schema: bool, summary: Option<String>, description: Option<String>, response_model: Option<PyObject>, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "TRACE", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn trace(
+        &self,
+        path: String,
+        status_code: Option<i32>,
+        tags: Option<Vec<String>>,
+        deprecated: bool,
+        include_in_schema: bool,
+        summary: Option<String>,
+        description: Option<String>,
+        response_model: Option<PyObject>,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "TRACE",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     /// Multi-method decorator. Phase B-1: registers a Route per method.
     #[pyo3(signature = (path, *, methods = None, **_kwargs))]
-    fn api_route(&self, path: String, methods: Option<Vec<String>>, _kwargs: Option<&Bound<'_, PyDict>>) -> ApiRouteDecorator {
+    fn api_route(
+        &self,
+        path: String,
+        methods: Option<Vec<String>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> ApiRouteDecorator {
         let methods = methods.unwrap_or_else(|| vec!["GET".into()]);
         ApiRouteDecorator {
             methods,
@@ -516,28 +884,44 @@ impl FastAPI {
     fn _routes_summary(&self, py: Python<'_>) -> PyResult<PyObject> {
         let list = pyo3::types::PyList::empty_bound(py);
         for r in self.routes.lock().iter() {
-            if r.method == "WEBSOCKET" { continue; }
+            if r.method == "WEBSOCKET" {
+                continue;
+            }
             let d = PyDict::new_bound(py);
             d.set_item("method", &r.method)?;
             d.set_item("path", &r.path)?;
             d.set_item("status_code", r.status_code)?;
-            d.set_item("response_model", r.response_model.as_ref().map(|p| p.clone_ref(py)))?;
-            d.set_item("response_class", r.response_class.as_ref().map(|p| p.clone_ref(py)))?;
+            d.set_item(
+                "response_model",
+                r.response_model.as_ref().map(|p| p.clone_ref(py)),
+            )?;
+            d.set_item(
+                "response_class",
+                r.response_class.as_ref().map(|p| p.clone_ref(py)),
+            )?;
             d.set_item("tags", r.tags.clone())?;
             d.set_item("deprecated", r.deprecated)?;
             d.set_item("include_in_schema", r.include_in_schema)?;
             d.set_item("summary", r.summary.clone())?;
             d.set_item("description", r.description.clone())?;
-            d.set_item("response_model_exclude_unset", r.response_model_exclude_unset)?;
+            d.set_item(
+                "response_model_exclude_unset",
+                r.response_model_exclude_unset,
+            )?;
             d.set_item("response_model_exclude_none", r.response_model_exclude_none)?;
-            d.set_item("response_model_exclude_defaults", r.response_model_exclude_defaults)?;
+            d.set_item(
+                "response_model_exclude_defaults",
+                r.response_model_exclude_defaults,
+            )?;
             d.set_item("response_model_by_alias", r.response_model_by_alias)?;
             d.set_item("operation_id", r.operation_id.clone())?;
             d.set_item("responses", r.responses.as_ref().map(|p| p.clone_ref(py)))?;
             d.set_item("response_description", r.response_description.clone())?;
             // Plan: list of plan dicts.
             let plan_list = pyo3::types::PyList::empty_bound(py);
-            for p in &r.param_plan { plan_list.append(p.bind(py))?; }
+            for p in &r.param_plan {
+                plan_list.append(p.bind(py))?;
+            }
             d.set_item("param_plan", plan_list)?;
             // Security: list of dicts {scheme_name, scopes, model}.
             let sec_list = pyo3::types::PyList::empty_bound(py);
@@ -557,12 +941,22 @@ impl FastAPI {
     /// Phase B-2 extension: alternative `_dispatch` is now in module-level dispatch
     /// but we keep the route-level fields in sync — see below.
 
-    fn middleware(&self, _kind: String) -> IdentityDecorator { IdentityDecorator }
-    fn exception_handler(&self, _exc: PyObject) -> IdentityDecorator { IdentityDecorator }
-    fn on_event(&self, _event: String) -> IdentityDecorator { IdentityDecorator }
+    fn middleware(&self, _kind: String) -> IdentityDecorator {
+        IdentityDecorator
+    }
+    fn exception_handler(&self, _exc: PyObject) -> IdentityDecorator {
+        IdentityDecorator
+    }
+    fn on_event(&self, _event: String) -> IdentityDecorator {
+        IdentityDecorator
+    }
 
     #[pyo3(signature = (_middleware_class, **_kwargs))]
-    fn add_middleware(&self, _middleware_class: PyObject, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+    fn add_middleware(
+        &self,
+        _middleware_class: PyObject,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
         Ok(())
     }
 
@@ -572,9 +966,17 @@ impl FastAPI {
     /// validation, response_model, exception handlers all still run.
     /// Use this for max-perf scenarios; use uvicorn for ASGI-rich deployments.
     #[pyo3(signature = (host = "127.0.0.1".to_string(), port = 8000, workers = 0))]
-    fn run_native(slf: Py<Self>, py: Python<'_>, host: String, port: u16, workers: usize) -> PyResult<()> {
+    fn run_native(
+        slf: Py<Self>,
+        py: Python<'_>,
+        host: String,
+        port: u16,
+        workers: usize,
+    ) -> PyResult<()> {
         let n_workers = if workers == 0 {
-            std::thread::available_parallelism().map(|p| p.get()).unwrap_or(1)
+            std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(1)
         } else {
             workers
         };
@@ -582,7 +984,15 @@ impl FastAPI {
     }
 
     #[pyo3(signature = (path, endpoint, *, methods = None, response_class = None, **_kwargs))]
-    fn add_api_route(&self, py: Python<'_>, path: String, endpoint: PyObject, methods: Option<Vec<String>>, response_class: Option<PyObject>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+    fn add_api_route(
+        &self,
+        py: Python<'_>,
+        path: String,
+        endpoint: PyObject,
+        methods: Option<Vec<String>>,
+        response_class: Option<PyObject>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
         let methods = methods.unwrap_or_else(|| vec!["GET".into()]);
         let plan = compile_route_plan(py, &endpoint, &path).unwrap_or_default();
         let is_async = detect_handler_is_async(py, &endpoint);
@@ -606,7 +1016,12 @@ impl FastAPI {
                 response_model_exclude_defaults: false,
                 response_model_by_alias: true,
                 response_model_include: None,
-                response_model_exclude: None, dependencies: vec![], security: vec![], operation_id: None, responses: None, response_description: None,
+                response_model_exclude: None,
+                dependencies: vec![],
+                security: vec![],
+                operation_id: None,
+                responses: None,
+                response_description: None,
                 is_async,
             });
         }
@@ -614,7 +1029,16 @@ impl FastAPI {
     }
 
     #[pyo3(signature = (router, *, prefix = "".to_string(), tags = None, include_in_schema = true, default_response_class = None, **_kwargs))]
-    fn include_router(&self, py: Python<'_>, router: PyRef<'_, APIRouter>, prefix: String, tags: Option<Vec<String>>, include_in_schema: bool, default_response_class: Option<PyObject>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+    fn include_router(
+        &self,
+        py: Python<'_>,
+        router: PyRef<'_, APIRouter>,
+        prefix: String,
+        tags: Option<Vec<String>>,
+        include_in_schema: bool,
+        default_response_class: Option<PyObject>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
         let mut routes = self.routes.lock();
         let extra_tags = tags.unwrap_or_default();
         let router_prefix = router.prefix.lock().clone();
@@ -631,21 +1055,29 @@ impl FastAPI {
             .collect();
         // Effective default_response_class for routes from this include:
         // explicit kwarg > router's default > app's default > None.
-        let router_default_rc = router.default_response_class.lock().as_ref().map(|p| p.clone_ref(py));
-        let effective_default_rc = default_response_class
-            .or(router_default_rc);
+        let router_default_rc = router
+            .default_response_class
+            .lock()
+            .as_ref()
+            .map(|p| p.clone_ref(py));
+        let effective_default_rc = default_response_class.or(router_default_rc);
         for r in router.routes.lock().iter() {
-            let mut joined = String::with_capacity(prefix.len() + router_prefix.len() + r.path.len());
+            let mut joined =
+                String::with_capacity(prefix.len() + router_prefix.len() + r.path.len());
             joined.push_str(&prefix);
             joined.push_str(&router_prefix);
             joined.push_str(&r.path);
 
             let mut merged_tags = r.tags.clone();
             for t in &router_tags {
-                if !merged_tags.contains(t) { merged_tags.push(t.clone()); }
+                if !merged_tags.contains(t) {
+                    merged_tags.push(t.clone());
+                }
             }
             for t in &extra_tags {
-                if !merged_tags.contains(t) { merged_tags.push(t.clone()); }
+                if !merged_tags.contains(t) {
+                    merged_tags.push(t.clone());
+                }
             }
 
             // If route doesn't have its own response_class, fall back to the
@@ -675,16 +1107,23 @@ impl FastAPI {
                 response_model_exclude_defaults: r.response_model_exclude_defaults,
                 response_model_by_alias: r.response_model_by_alias,
                 response_model_include: r.response_model_include.as_ref().map(|p| p.clone_ref(py)),
-                response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)), dependencies: {
+                response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)),
+                dependencies: {
                     // Router-level deps run BEFORE the route's own — preserve
                     // FastAPI's order (parent first). Avoids surprise where a
                     // router-level auth check is bypassed by a route-level
                     // dep that completes faster.
-                    let mut merged: Vec<PyObject> = router_deps.iter().map(|p| p.clone_ref(py)).collect();
-                    for p in r.dependencies.iter() { merged.push(p.clone_ref(py)); }
+                    let mut merged: Vec<PyObject> =
+                        router_deps.iter().map(|p| p.clone_ref(py)).collect();
+                    for p in r.dependencies.iter() {
+                        merged.push(p.clone_ref(py));
+                    }
                     merged
                 },
-                security: r.security.iter().map(|s| s.clone_ref(py)).collect(), operation_id: r.operation_id.clone(), responses: r.responses.as_ref().map(|p| p.clone_ref(py)), response_description: r.response_description.clone(),
+                security: r.security.iter().map(|s| s.clone_ref(py)).collect(),
+                operation_id: r.operation_id.clone(),
+                responses: r.responses.as_ref().map(|p| p.clone_ref(py)),
+                response_description: r.response_description.clone(),
                 is_async: r.is_async,
             });
         }
@@ -698,16 +1137,24 @@ impl FastAPI {
         info.set_item("title", &*self.title.lock())?;
         info.set_item("version", &*self.version.lock())?;
         let desc = self.description.lock().clone();
-        if !desc.is_empty() { info.set_item("description", desc)?; }
-        if let Some(s) = self.summary.lock().clone() { info.set_item("summary", s)?; }
-        if let Some(t) = self.terms_of_service.lock().clone() { info.set_item("termsOfService", t)?; }
+        if !desc.is_empty() {
+            info.set_item("description", desc)?;
+        }
+        if let Some(s) = self.summary.lock().clone() {
+            info.set_item("summary", s)?;
+        }
+        if let Some(t) = self.terms_of_service.lock().clone() {
+            info.set_item("termsOfService", t)?;
+        }
         dict.set_item("info", info)?;
         // Phase E: aggregate security schemes across all routes.
         let security_schemes = PyDict::new_bound(py);
         // Build paths from registered routes (Phase H expands this).
         let paths_dict = PyDict::new_bound(py);
         for r in self.routes.lock().iter() {
-            if !r.include_in_schema || r.method == "WEBSOCKET" { continue; }
+            if !r.include_in_schema || r.method == "WEBSOCKET" {
+                continue;
+            }
             // Register every scheme this route depends on into the global
             // securitySchemes dict (first occurrence wins).
             for s in &r.security {
@@ -727,8 +1174,12 @@ impl FastAPI {
             if r.deprecated {
                 op.set_item("deprecated", true)?;
             }
-            if let Some(s) = &r.summary { op.set_item("summary", s)?; }
-            if let Some(d) = &r.description { op.set_item("description", d)?; }
+            if let Some(s) = &r.summary {
+                op.set_item("summary", s)?;
+            }
+            if let Some(d) = &r.description {
+                op.set_item("description", d)?;
+            }
             // Phase H fills in real responses/parameters/requestBody schemas.
             let responses = PyDict::new_bound(py);
             let status_str = r.status_code.unwrap_or(200).to_string();
@@ -802,7 +1253,6 @@ impl FastAPI {
         headers: Option<Vec<(String, String)>>,
         body: Option<&Bound<'_, PyBytes>>,
     ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
-
         // Auto-serve OpenAPI schema at the configured `openapi_url`. Phase H
         // will replace this with a properly-cached pre-built schema.
         let openapi_url = self.openapi_url.lock().clone();
@@ -810,7 +1260,11 @@ impl FastAPI {
             if path == *url && (method == "GET" || method == "HEAD") {
                 let schema = self.openapi(py)?;
                 let json_bytes = serialize_value_to_json(py, &schema)?;
-                let body = if method == "HEAD" { Vec::new() } else { json_bytes };
+                let body = if method == "HEAD" {
+                    Vec::new()
+                } else {
+                    json_bytes
+                };
                 return Ok((
                     200,
                     vec![("content-type".into(), "application/json".into())],
@@ -823,8 +1277,13 @@ impl FastAPI {
         if let Some(ref url) = docs_url {
             if path == *url && (method == "GET" || method == "HEAD") {
                 let title = self.title.lock().clone();
-                let html = build_docs_html(&title, openapi_url.as_deref().unwrap_or("/openapi.json"));
-                let body = if method == "HEAD" { Vec::new() } else { html.into_bytes() };
+                let html =
+                    build_docs_html(&title, openapi_url.as_deref().unwrap_or("/openapi.json"));
+                let body = if method == "HEAD" {
+                    Vec::new()
+                } else {
+                    html.into_bytes()
+                };
                 return Ok((
                     200,
                     vec![("content-type".into(), "text/html; charset=utf-8".into())],
@@ -836,8 +1295,13 @@ impl FastAPI {
         if let Some(ref url) = redoc_url {
             if path == *url && (method == "GET" || method == "HEAD") {
                 let title = self.title.lock().clone();
-                let html = build_redoc_html(&title, openapi_url.as_deref().unwrap_or("/openapi.json"));
-                let body = if method == "HEAD" { Vec::new() } else { html.into_bytes() };
+                let html =
+                    build_redoc_html(&title, openapi_url.as_deref().unwrap_or("/openapi.json"));
+                let body = if method == "HEAD" {
+                    Vec::new()
+                } else {
+                    html.into_bytes()
+                };
                 return Ok((
                     200,
                     vec![("content-type".into(), "text/html; charset=utf-8".into())],
@@ -848,10 +1312,22 @@ impl FastAPI {
 
         // Find a matching route via path-template matching.
         // Two-pass: exact method first, then HEAD→GET fallback.
-        let (handler, status_code, response_model, param_plan, path_params,
-             response_class, rm_exclude_unset, rm_exclude_none,
-             rm_exclude_defaults, rm_by_alias, rm_include, rm_exclude,
-             route_deps_markers, route_is_async);
+        let (
+            handler,
+            status_code,
+            response_model,
+            param_plan,
+            path_params,
+            response_class,
+            rm_exclude_unset,
+            rm_exclude_none,
+            rm_exclude_defaults,
+            rm_by_alias,
+            rm_include,
+            rm_exclude,
+            route_deps_markers,
+            route_is_async,
+        );
         {
             let routes = self.routes.lock();
             let mut path_exists = false;
@@ -885,18 +1361,27 @@ impl FastAPI {
                     response_model = r.response_model.as_ref().map(|p| p.clone_ref(py));
                     param_plan = clone_param_plan(py, &r.param_plan);
                     path_params = params;
-                    response_class = r
-                        .response_class
-                        .as_ref()
-                        .map(|p| p.clone_ref(py))
-                        .or_else(|| self.default_response_class.lock().as_ref().map(|p| p.clone_ref(py)));
+                    response_class =
+                        r.response_class
+                            .as_ref()
+                            .map(|p| p.clone_ref(py))
+                            .or_else(|| {
+                                self.default_response_class
+                                    .lock()
+                                    .as_ref()
+                                    .map(|p| p.clone_ref(py))
+                            });
                     rm_exclude_unset = r.response_model_exclude_unset;
                     rm_exclude_none = r.response_model_exclude_none;
                     rm_exclude_defaults = r.response_model_exclude_defaults;
                     rm_by_alias = r.response_model_by_alias;
                     rm_include = r.response_model_include.as_ref().map(|p| p.clone_ref(py));
                     rm_exclude = r.response_model_exclude.as_ref().map(|p| p.clone_ref(py));
-                    route_deps_markers = r.dependencies.iter().map(|p| p.clone_ref(py)).collect::<Vec<_>>();
+                    route_deps_markers = r
+                        .dependencies
+                        .iter()
+                        .map(|p| p.clone_ref(py))
+                        .collect::<Vec<_>>();
                     route_is_async = r.is_async;
                 }
                 None => {
@@ -919,11 +1404,7 @@ impl FastAPI {
                                 Some(qs) if !qs.is_empty() => format!("{}?{}", alt, qs),
                                 _ => alt,
                             };
-                            return Ok((
-                                307,
-                                vec![("location".into(), location)],
-                                Vec::new(),
-                            ));
+                            return Ok((307, vec![("location".into(), location)], Vec::new()));
                         }
                     }
                     drop(routes);
@@ -965,7 +1446,9 @@ impl FastAPI {
                 let routing_mod = py.import_bound("hyperfastapi._routing")?;
                 let async_caller = routing_mod.getattr("call_with_async_handling")?;
                 let empty_kwargs = PyDict::new_bound(py);
-                async_caller.call1((handler.bind(py), &empty_kwargs))?.unbind()
+                async_caller
+                    .call1((handler.bind(py), &empty_kwargs))?
+                    .unbind()
             } else {
                 handler.call0(py)?
             };
@@ -1016,7 +1499,9 @@ impl FastAPI {
                 let kw = PyDict::new_bound(py);
                 kw.set_item("keep_blank_values", true)?;
                 let parsed = parse_qs.call((qs,), Some(&kw))?;
-                parsed.downcast_into::<PyDict>().map_err(|e| pyo3::PyErr::from(e))?
+                parsed
+                    .downcast_into::<PyDict>()
+                    .map_err(|e| pyo3::PyErr::from(e))?
             }
         } else {
             PyDict::new_bound(py)
@@ -1067,15 +1552,23 @@ impl FastAPI {
                 Ok(d) => d.clone(),
                 Err(_) => return false,
             };
-            let s: String = dict.get_item("source").ok().flatten()
-                .and_then(|v| v.extract().ok()).unwrap_or_default();
-            if s == "form" || s == "file" { return true; }
+            let s: String = dict
+                .get_item("source")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_default();
+            if s == "form" || s == "file" {
+                return true;
+            }
             if s == "depends" || s == "security" {
                 if let Ok(Some(sub)) = dict.get_item("dep_plan") {
                     if let Ok(list) = sub.downcast::<pyo3::types::PyList>() {
                         for item in list.iter() {
                             let obj: PyObject = item.unbind().into();
-                            if plan_has_form(py, &obj) { return true; }
+                            if plan_has_form(py, &obj) {
+                                return true;
+                            }
                         }
                     }
                 }
@@ -1092,9 +1585,8 @@ impl FastAPI {
         let _ = route_deps_have_form;
         let needs_form = param_plan.iter().any(|p| plan_has_form(py, p));
         let form_dict: Bound<'_, PyDict> = if needs_form {
-            let body_bytes_for_form: Vec<u8> = body
-                .map(|b| b.as_bytes().to_vec())
-                .unwrap_or_default();
+            let body_bytes_for_form: Vec<u8> =
+                body.map(|b| b.as_bytes().to_vec()).unwrap_or_default();
             let content_type: String = header_lookup
                 .get_item("content-type")?
                 .and_then(|v| v.extract::<Vec<String>>().ok())
@@ -1104,7 +1596,9 @@ impl FastAPI {
             let parser = routing_mod.getattr("parse_form_body")?;
             let bytes_obj = pyo3::types::PyBytes::new_bound(py, &body_bytes_for_form);
             let parsed = parser.call1((bytes_obj, content_type))?;
-            parsed.downcast_into::<PyDict>().map_err(pyo3::PyErr::from)?
+            parsed
+                .downcast_into::<PyDict>()
+                .map_err(pyo3::PyErr::from)?
         } else {
             PyDict::new_bound(py)
         };
@@ -1140,9 +1634,7 @@ impl FastAPI {
         // Pydantic body params: validate the raw bytes through pydantic-core
         // directly. For multi-body or `Body(embed=True)`, parse JSON once and
         // dispatch each entry against its key in the envelope.
-        let body_bytes: Vec<u8> = body
-            .map(|b| b.as_bytes().to_vec())
-            .unwrap_or_default();
+        let body_bytes: Vec<u8> = body.map(|b| b.as_bytes().to_vec()).unwrap_or_default();
 
         // Phase K: when the route declares a JSON body param, reject wrong
         // Content-Type before even attempting to validate. Matches FastAPI
@@ -1154,11 +1646,21 @@ impl FastAPI {
                 Ok(d) => d.clone(),
                 Err(_) => return false,
             };
-            let s: String = dict.get_item("source").ok().flatten()
-                .and_then(|v| v.extract().ok()).unwrap_or_default();
-            if s != "body" { return false; }
-            let mt: String = dict.get_item("media_type").ok().flatten()
-                .and_then(|v| v.extract().ok()).unwrap_or_else(|| "application/json".into());
+            let s: String = dict
+                .get_item("source")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_default();
+            if s != "body" {
+                return false;
+            }
+            let mt: String = dict
+                .get_item("media_type")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_else(|| "application/json".into());
             mt == "application/json" || mt.ends_with("+json")
         });
         if has_json_body && !body_bytes.is_empty() {
@@ -1169,7 +1671,12 @@ impl FastAPI {
                 .unwrap_or_default();
             if !ct.is_empty() {
                 // Strip ;charset=... and similar parameters before checking.
-                let ct_main = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+                let ct_main = ct
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
                 let is_json_ct = ct_main == "application/json"
                     || (ct_main.starts_with("application/") && ct_main.ends_with("+json"));
                 if !is_json_ct {
@@ -1188,11 +1695,7 @@ impl FastAPI {
         )?;
 
         if !errors.is_empty() || !pydantic_error_dicts.is_empty() {
-            return build_validation_error_response_mixed(
-                py,
-                &errors,
-                &pydantic_error_dicts,
-            );
+            return build_validation_error_response_mixed(py, &errors, &pydantic_error_dicts);
         }
 
         // ---- Phase D: dependencies (Depends / Security) --------------------
@@ -1205,15 +1708,20 @@ impl FastAPI {
             .map(|p| p.clone_ref(py))
             .collect();
         let extra_deps_count = app_deps_markers.len() + route_deps_markers.len();
-        let needs_deps = extra_deps_count > 0 || param_plan.iter().any(|p| {
-            let dict = match p.bind(py).downcast::<PyDict>() {
-                Ok(d) => d.clone(),
-                Err(_) => return false,
-            };
-            let s: String = dict.get_item("source").ok().flatten()
-                .and_then(|v| v.extract().ok()).unwrap_or_default();
-            s == "depends" || s == "security" || s == "background_tasks" || s == "request"
-        });
+        let needs_deps = extra_deps_count > 0
+            || param_plan.iter().any(|p| {
+                let dict = match p.bind(py).downcast::<PyDict>() {
+                    Ok(d) => d.clone(),
+                    Err(_) => return false,
+                };
+                let s: String = dict
+                    .get_item("source")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or_default();
+                s == "depends" || s == "security" || s == "background_tasks" || s == "request"
+            });
         if needs_deps {
             let routing_mod = py.import_bound("hyperfastapi._routing")?;
             let resolver = routing_mod.getattr("resolve_dependencies")?;
@@ -1222,8 +1730,12 @@ impl FastAPI {
             // Prepend app + route-level deps as synthetic _internal entries.
             if !app_deps_markers.is_empty() || !route_deps_markers.is_empty() {
                 let mut all_extra: Vec<PyObject> = Vec::with_capacity(extra_deps_count);
-                for d in &app_deps_markers { all_extra.push(d.clone_ref(py)); }
-                for d in &route_deps_markers { all_extra.push(d.clone_ref(py)); }
+                for d in &app_deps_markers {
+                    all_extra.push(d.clone_ref(py));
+                }
+                for d in &route_deps_markers {
+                    all_extra.push(d.clone_ref(py));
+                }
                 let synthetic = expander.call1((all_extra,))?;
                 if let Ok(list) = synthetic.downcast::<pyo3::types::PyList>() {
                     for item in list.iter() {
@@ -1236,7 +1748,10 @@ impl FastAPI {
             }
             let path_params_list = pyo3::types::PyList::empty_bound(py);
             for (n, v) in &path_params {
-                path_params_list.append(pyo3::types::PyTuple::new_bound(py, [n.as_str(), v.as_str()]))?;
+                path_params_list.append(pyo3::types::PyTuple::new_bound(
+                    py,
+                    [n.as_str(), v.as_str()],
+                ))?;
             }
             let result = resolver.call1((
                 plan_list,
@@ -1272,7 +1787,9 @@ impl FastAPI {
                         for (k, v) in h_list {
                             hdrs.push((k, v));
                         }
-                    } else if let Ok(h_map) = h.extract::<std::collections::HashMap<String, String>>() {
+                    } else if let Ok(h_map) =
+                        h.extract::<std::collections::HashMap<String, String>>()
+                    {
                         for (k, v) in h_map {
                             hdrs.push((k, v));
                         }
@@ -1353,11 +1870,21 @@ impl FastAPI {
             let validated = model_class.call_method1(py, "model_validate", (result,))?;
             let dump_kwargs = PyDict::new_bound(py);
             dump_kwargs.set_item("by_alias", rm_by_alias)?;
-            if rm_exclude_unset { dump_kwargs.set_item("exclude_unset", true)?; }
-            if rm_exclude_none { dump_kwargs.set_item("exclude_none", true)?; }
-            if rm_exclude_defaults { dump_kwargs.set_item("exclude_defaults", true)?; }
-            if let Some(inc) = &rm_include { dump_kwargs.set_item("include", inc.clone_ref(py))?; }
-            if let Some(exc) = &rm_exclude { dump_kwargs.set_item("exclude", exc.clone_ref(py))?; }
+            if rm_exclude_unset {
+                dump_kwargs.set_item("exclude_unset", true)?;
+            }
+            if rm_exclude_none {
+                dump_kwargs.set_item("exclude_none", true)?;
+            }
+            if rm_exclude_defaults {
+                dump_kwargs.set_item("exclude_defaults", true)?;
+            }
+            if let Some(inc) = &rm_include {
+                dump_kwargs.set_item("include", inc.clone_ref(py))?;
+            }
+            if let Some(exc) = &rm_exclude {
+                dump_kwargs.set_item("exclude", exc.clone_ref(py))?;
+            }
             validated.call_method_bound(py, "model_dump", (), Some(&dump_kwargs))?
         } else {
             result
@@ -1371,11 +1898,8 @@ impl FastAPI {
             if !is_json_rc {
                 let kwargs_obj = PyDict::new_bound(py);
                 kwargs_obj.set_item("status_code", status_code)?;
-                let response_obj = rc.call_bound(
-                    py,
-                    (payload_obj.clone_ref(py),),
-                    Some(&kwargs_obj),
-                )?;
+                let response_obj =
+                    rc.call_bound(py, (payload_obj.clone_ref(py),), Some(&kwargs_obj))?;
                 return extract_response_object(py, &response_obj, is_head);
             }
         }
@@ -1455,7 +1979,13 @@ pub struct APIRouter {
 impl APIRouter {
     #[new]
     #[pyo3(signature = (*, prefix = "".to_string(), tags = None, default_response_class = None, dependencies = None, **_kwargs))]
-    fn new(prefix: String, tags: Option<Vec<String>>, default_response_class: Option<PyObject>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> Self {
+    fn new(
+        prefix: String,
+        tags: Option<Vec<String>>,
+        default_response_class: Option<PyObject>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> Self {
         Self {
             prefix: Mutex::new(prefix),
             tags: Mutex::new(tags.unwrap_or_default()),
@@ -1466,9 +1996,13 @@ impl APIRouter {
     }
 
     #[getter]
-    fn prefix(&self) -> String { self.prefix.lock().clone() }
+    fn prefix(&self) -> String {
+        self.prefix.lock().clone()
+    }
     #[getter]
-    fn tags(&self) -> Vec<String> { self.tags.lock().clone() }
+    fn tags(&self) -> Vec<String> {
+        self.tags.lock().clone()
+    }
 
     #[getter]
     fn routes(&self, py: Python<'_>) -> PyObject {
@@ -1477,42 +2011,329 @@ impl APIRouter {
 
     #[pyo3(signature = (path, *, tags = None, response_model = None, include_in_schema = true, status_code = None, deprecated = false, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, summary = None, description = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn get(&self, path: String, tags: Option<Vec<String>>, response_model: Option<PyObject>, include_in_schema: bool, status_code: Option<i32>, deprecated: bool, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, summary: Option<String>, description: Option<String>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "GET", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn get(
+        &self,
+        path: String,
+        tags: Option<Vec<String>>,
+        response_model: Option<PyObject>,
+        include_in_schema: bool,
+        status_code: Option<i32>,
+        deprecated: bool,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        summary: Option<String>,
+        description: Option<String>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "GET",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
     #[pyo3(signature = (path, *, tags = None, response_model = None, include_in_schema = true, status_code = None, deprecated = false, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, summary = None, description = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn post(&self, path: String, tags: Option<Vec<String>>, response_model: Option<PyObject>, include_in_schema: bool, status_code: Option<i32>, deprecated: bool, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, summary: Option<String>, description: Option<String>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "POST", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn post(
+        &self,
+        path: String,
+        tags: Option<Vec<String>>,
+        response_model: Option<PyObject>,
+        include_in_schema: bool,
+        status_code: Option<i32>,
+        deprecated: bool,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        summary: Option<String>,
+        description: Option<String>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "POST",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
     #[pyo3(signature = (path, *, tags = None, response_model = None, include_in_schema = true, status_code = None, deprecated = false, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, summary = None, description = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn put(&self, path: String, tags: Option<Vec<String>>, response_model: Option<PyObject>, include_in_schema: bool, status_code: Option<i32>, deprecated: bool, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, summary: Option<String>, description: Option<String>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "PUT", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn put(
+        &self,
+        path: String,
+        tags: Option<Vec<String>>,
+        response_model: Option<PyObject>,
+        include_in_schema: bool,
+        status_code: Option<i32>,
+        deprecated: bool,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        summary: Option<String>,
+        description: Option<String>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "PUT",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
     #[pyo3(signature = (path, *, tags = None, response_model = None, include_in_schema = true, status_code = None, deprecated = false, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, summary = None, description = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn delete(&self, path: String, tags: Option<Vec<String>>, response_model: Option<PyObject>, include_in_schema: bool, status_code: Option<i32>, deprecated: bool, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, summary: Option<String>, description: Option<String>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "DELETE", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn delete(
+        &self,
+        path: String,
+        tags: Option<Vec<String>>,
+        response_model: Option<PyObject>,
+        include_in_schema: bool,
+        status_code: Option<i32>,
+        deprecated: bool,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        summary: Option<String>,
+        description: Option<String>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "DELETE",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
     #[pyo3(signature = (path, *, tags = None, response_model = None, include_in_schema = true, status_code = None, deprecated = false, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, summary = None, description = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn patch(&self, path: String, tags: Option<Vec<String>>, response_model: Option<PyObject>, include_in_schema: bool, status_code: Option<i32>, deprecated: bool, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, summary: Option<String>, description: Option<String>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "PATCH", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn patch(
+        &self,
+        path: String,
+        tags: Option<Vec<String>>,
+        response_model: Option<PyObject>,
+        include_in_schema: bool,
+        status_code: Option<i32>,
+        deprecated: bool,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        summary: Option<String>,
+        description: Option<String>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "PATCH",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
     #[pyo3(signature = (path, *, tags = None, response_model = None, include_in_schema = true, status_code = None, deprecated = false, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, summary = None, description = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn options(&self, path: String, tags: Option<Vec<String>>, response_model: Option<PyObject>, include_in_schema: bool, status_code: Option<i32>, deprecated: bool, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, summary: Option<String>, description: Option<String>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "OPTIONS", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn options(
+        &self,
+        path: String,
+        tags: Option<Vec<String>>,
+        response_model: Option<PyObject>,
+        include_in_schema: bool,
+        status_code: Option<i32>,
+        deprecated: bool,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        summary: Option<String>,
+        description: Option<String>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "OPTIONS",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
     #[pyo3(signature = (path, *, tags = None, response_model = None, include_in_schema = true, status_code = None, deprecated = false, response_class = None, response_model_exclude_unset = false, response_model_exclude_none = false, response_model_exclude_defaults = false, response_model_by_alias = true, response_model_include = None, response_model_exclude = None, summary = None, description = None, dependencies = None, **_kwargs))]
     #[allow(clippy::too_many_arguments)]
-    fn head(&self, path: String, tags: Option<Vec<String>>, response_model: Option<PyObject>, include_in_schema: bool, status_code: Option<i32>, deprecated: bool, response_class: Option<PyObject>, response_model_exclude_unset: bool, response_model_exclude_none: bool, response_model_exclude_defaults: bool, response_model_by_alias: bool, response_model_include: Option<PyObject>, response_model_exclude: Option<PyObject>, summary: Option<String>, description: Option<String>, dependencies: Option<Vec<PyObject>>, _kwargs: Option<&Bound<'_, PyDict>>) -> RouteDecorator {
-        self.make_decorator(DecoratorOpts { method: "HEAD", path, status_code, response_model, tags, deprecated, include_in_schema, summary, description, response_class, response_model_exclude_unset, response_model_exclude_none, response_model_exclude_defaults, response_model_by_alias, response_model_include, response_model_exclude, dependencies: dependencies.unwrap_or_default(), operation_id: opex_oid(_kwargs.as_deref()), responses: opex_resp(_kwargs.as_deref()), response_description: opex_rdesc(_kwargs.as_deref()) })
+    fn head(
+        &self,
+        path: String,
+        tags: Option<Vec<String>>,
+        response_model: Option<PyObject>,
+        include_in_schema: bool,
+        status_code: Option<i32>,
+        deprecated: bool,
+        response_class: Option<PyObject>,
+        response_model_exclude_unset: bool,
+        response_model_exclude_none: bool,
+        response_model_exclude_defaults: bool,
+        response_model_by_alias: bool,
+        response_model_include: Option<PyObject>,
+        response_model_exclude: Option<PyObject>,
+        summary: Option<String>,
+        description: Option<String>,
+        dependencies: Option<Vec<PyObject>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> RouteDecorator {
+        self.make_decorator(DecoratorOpts {
+            method: "HEAD",
+            path,
+            status_code,
+            response_model,
+            tags,
+            deprecated,
+            include_in_schema,
+            summary,
+            description,
+            response_class,
+            response_model_exclude_unset,
+            response_model_exclude_none,
+            response_model_exclude_defaults,
+            response_model_by_alias,
+            response_model_include,
+            response_model_exclude,
+            dependencies: dependencies.unwrap_or_default(),
+            operation_id: opex_oid(_kwargs.as_deref()),
+            responses: opex_resp(_kwargs.as_deref()),
+            response_description: opex_rdesc(_kwargs.as_deref()),
+        })
     }
 
     #[pyo3(signature = (router, *, prefix = "".to_string(), tags = None, **_kwargs))]
-    fn include_router(&self, py: Python<'_>, router: PyRef<'_, APIRouter>, prefix: String, tags: Option<Vec<String>>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
+    fn include_router(
+        &self,
+        py: Python<'_>,
+        router: PyRef<'_, APIRouter>,
+        prefix: String,
+        tags: Option<Vec<String>>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
         let mut my_routes = self.routes.lock();
         let extra_tags = tags.unwrap_or_default();
         let inner_prefix = router.prefix.lock().clone();
@@ -1525,17 +2346,22 @@ impl APIRouter {
             .map(|p| p.clone_ref(py))
             .collect();
         for r in router.routes.lock().iter() {
-            let mut joined = String::with_capacity(prefix.len() + inner_prefix.len() + r.path.len());
+            let mut joined =
+                String::with_capacity(prefix.len() + inner_prefix.len() + r.path.len());
             joined.push_str(&prefix);
             joined.push_str(&inner_prefix);
             joined.push_str(&r.path);
 
             let mut merged_tags = r.tags.clone();
             for t in &inner_tags {
-                if !merged_tags.contains(t) { merged_tags.push(t.clone()); }
+                if !merged_tags.contains(t) {
+                    merged_tags.push(t.clone());
+                }
             }
             for t in &extra_tags {
-                if !merged_tags.contains(t) { merged_tags.push(t.clone()); }
+                if !merged_tags.contains(t) {
+                    merged_tags.push(t.clone());
+                }
             }
 
             my_routes.push(Route {
@@ -1556,12 +2382,19 @@ impl APIRouter {
                 response_model_exclude_defaults: r.response_model_exclude_defaults,
                 response_model_by_alias: r.response_model_by_alias,
                 response_model_include: r.response_model_include.as_ref().map(|p| p.clone_ref(py)),
-                response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)), dependencies: {
-                    let mut merged: Vec<PyObject> = inner_deps.iter().map(|p| p.clone_ref(py)).collect();
-                    for p in r.dependencies.iter() { merged.push(p.clone_ref(py)); }
+                response_model_exclude: r.response_model_exclude.as_ref().map(|p| p.clone_ref(py)),
+                dependencies: {
+                    let mut merged: Vec<PyObject> =
+                        inner_deps.iter().map(|p| p.clone_ref(py)).collect();
+                    for p in r.dependencies.iter() {
+                        merged.push(p.clone_ref(py));
+                    }
                     merged
                 },
-                security: r.security.iter().map(|s| s.clone_ref(py)).collect(), operation_id: r.operation_id.clone(), responses: r.responses.as_ref().map(|p| p.clone_ref(py)), response_description: r.response_description.clone(),
+                security: r.security.iter().map(|s| s.clone_ref(py)).collect(),
+                operation_id: r.operation_id.clone(),
+                responses: r.responses.as_ref().map(|p| p.clone_ref(py)),
+                response_description: r.response_description.clone(),
                 is_async: r.is_async,
             });
         }
@@ -1602,7 +2435,9 @@ pub struct IdentityDecorator;
 
 #[pymethods]
 impl IdentityDecorator {
-    fn __call__(&self, func: PyObject) -> PyObject { func }
+    fn __call__(&self, func: PyObject) -> PyObject {
+        func
+    }
 }
 
 /// Decorator returned by `app.api_route(path, methods=[...])` — registers one
@@ -1639,7 +2474,12 @@ impl ApiRouteDecorator {
                 response_model_exclude_defaults: false,
                 response_model_by_alias: true,
                 response_model_include: None,
-                response_model_exclude: None, dependencies: vec![], security: vec![], operation_id: None, responses: None, response_description: None,
+                response_model_exclude: None,
+                dependencies: vec![],
+                security: vec![],
+                operation_id: None,
+                responses: None,
+                response_description: None,
                 is_async,
             });
         }
@@ -1695,7 +2535,11 @@ fn extract_response_object(
     let status_code: u16 = bound.getattr("status_code")?.extract()?;
     let body_obj = bound.getattr("body")?;
     let body: Vec<u8> = body_obj.extract().unwrap_or_default();
-    let body = if is_head || is_no_content_status(status_code) { Vec::new() } else { body };
+    let body = if is_head || is_no_content_status(status_code) {
+        Vec::new()
+    } else {
+        body
+    };
 
     // Headers may be a list of (k, v) tuples (Starlette internal raw_headers)
     // or a Headers mapping. Walk the public `headers` if present.
@@ -1804,7 +2648,11 @@ fn serialize_value_to_json(py: Python<'_>, value: &PyObject) -> PyResult<Vec<u8>
 fn match_path_template(template: &str, path: &str) -> Option<Vec<(String, String)>> {
     // Fast path: no placeholders at all → bytewise equality.
     if !template.contains('{') {
-        return if template == path { Some(Vec::new()) } else { None };
+        return if template == path {
+            Some(Vec::new())
+        } else {
+            None
+        };
     }
 
     // Split by '/' so each segment can be matched / captured independently.
@@ -1903,12 +2751,24 @@ fn cast_path_param(
             }
         }
         "path:uuid" => {
-            let uuid_mod = py
-                .import_bound("uuid")
-                .map_err(|_| ValidationErrorEntry::generic("path", name, value, "uuid_parsing", "UUID module unavailable"))?;
-            let uuid_class = uuid_mod
-                .getattr("UUID")
-                .map_err(|_| ValidationErrorEntry::generic("path", name, value, "uuid_parsing", "UUID class unavailable"))?;
+            let uuid_mod = py.import_bound("uuid").map_err(|_| {
+                ValidationErrorEntry::generic(
+                    "path",
+                    name,
+                    value,
+                    "uuid_parsing",
+                    "UUID module unavailable",
+                )
+            })?;
+            let uuid_class = uuid_mod.getattr("UUID").map_err(|_| {
+                ValidationErrorEntry::generic(
+                    "path",
+                    name,
+                    value,
+                    "uuid_parsing",
+                    "UUID class unavailable",
+                )
+            })?;
             match uuid_class.call1((value,)) {
                 Ok(u) => Ok(u.unbind().into()),
                 Err(_) => Err(ValidationErrorEntry {
@@ -1935,7 +2795,13 @@ pub(crate) struct ValidationErrorEntry {
 }
 
 impl ValidationErrorEntry {
-    fn generic(loc_kind: &'static str, name: &str, input: &str, err_type: &'static str, msg: &'static str) -> Self {
+    fn generic(
+        loc_kind: &'static str,
+        name: &str,
+        input: &str,
+        err_type: &'static str,
+        msg: &'static str,
+    ) -> Self {
         Self {
             err_type,
             loc: (loc_kind, name.to_string()),
@@ -2100,16 +2966,28 @@ fn extract_body_params(
     if single && !any_embed {
         let entry = &body_entries[0];
         let name: String = entry
-            .get_item("name").ok().flatten()
-            .and_then(|v| v.extract().ok()).unwrap_or_default();
+            .get_item("name")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or_default();
         let type_kind: String = entry
-            .get_item("type").ok().flatten()
-            .and_then(|v| v.extract().ok()).unwrap_or_else(|| "model".into());
+            .get_item("type")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or_else(|| "model".into());
         let required: bool = entry
-            .get_item("required").ok().flatten()
-            .and_then(|v| v.extract().ok()).unwrap_or(true);
+            .get_item("required")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or(true);
         let model: Option<PyObject> = entry
-            .get_item("model").ok().flatten().map(|v| v.unbind().into());
+            .get_item("model")
+            .ok()
+            .flatten()
+            .map(|v| v.unbind().into());
 
         if body_bytes.is_empty() {
             if required {
@@ -2181,17 +3059,19 @@ fn extract_body_params(
     if body_bytes.is_empty() {
         for entry in &body_entries {
             let name: String = entry
-                .get_item("name").ok().flatten()
-                .and_then(|v| v.extract().ok()).unwrap_or_default();
+                .get_item("name")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_default();
             let required: bool = entry
-                .get_item("required").ok().flatten()
-                .and_then(|v| v.extract().ok()).unwrap_or(true);
+                .get_item("required")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or(true);
             if required {
-                pydantic_error_dicts.push(missing_body_dict(
-                    py,
-                    &["body".into(), name],
-                    None,
-                )?);
+                pydantic_error_dicts.push(missing_body_dict(py, &["body".into(), name], None)?);
             }
         }
         return Ok(());
@@ -2213,17 +3093,19 @@ fn extract_body_params(
             // gets a "missing" error.
             for entry in &body_entries {
                 let name: String = entry
-                    .get_item("name").ok().flatten()
-                    .and_then(|v| v.extract().ok()).unwrap_or_default();
+                    .get_item("name")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or_default();
                 let required: bool = entry
-                    .get_item("required").ok().flatten()
-                    .and_then(|v| v.extract().ok()).unwrap_or(true);
+                    .get_item("required")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or(true);
                 if required {
-                    pydantic_error_dicts.push(missing_body_dict(
-                        py,
-                        &["body".into(), name],
-                        None,
-                    )?);
+                    pydantic_error_dicts.push(missing_body_dict(py, &["body".into(), name], None)?);
                 }
             }
             return Ok(());
@@ -2232,16 +3114,28 @@ fn extract_body_params(
 
     for entry in &body_entries {
         let name: String = entry
-            .get_item("name").ok().flatten()
-            .and_then(|v| v.extract().ok()).unwrap_or_default();
+            .get_item("name")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or_default();
         let type_kind: String = entry
-            .get_item("type").ok().flatten()
-            .and_then(|v| v.extract().ok()).unwrap_or_else(|| "model".into());
+            .get_item("type")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or_else(|| "model".into());
         let required: bool = entry
-            .get_item("required").ok().flatten()
-            .and_then(|v| v.extract().ok()).unwrap_or(true);
+            .get_item("required")
+            .ok()
+            .flatten()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or(true);
         let model: Option<PyObject> = entry
-            .get_item("model").ok().flatten().map(|v| v.unbind().into());
+            .get_item("model")
+            .ok()
+            .flatten()
+            .map(|v| v.unbind().into());
 
         let sub = match envelope_dict.get_item(&name)? {
             Some(v) => v,
@@ -2266,11 +3160,8 @@ fn extract_body_params(
                             kwargs.set_item(&name, model_instance)?;
                         }
                         Err(err) => {
-                            let mut dicts = pydantic_errors_to_dicts(
-                                py,
-                                &err,
-                                &["body".into(), name.clone()],
-                            )?;
+                            let mut dicts =
+                                pydantic_errors_to_dicts(py, &err, &["body".into(), name.clone()])?;
                             pydantic_error_dicts.append(&mut dicts);
                         }
                     }
@@ -2289,11 +3180,8 @@ fn extract_body_params(
                             kwargs.set_item(&name, values)?;
                         }
                         Err(err) => {
-                            let mut dicts = pydantic_errors_to_dicts(
-                                py,
-                                &err,
-                                &["body".into(), name.clone()],
-                            )?;
+                            let mut dicts =
+                                pydantic_errors_to_dicts(py, &err, &["body".into(), name.clone()])?;
                             pydantic_error_dicts.append(&mut dicts);
                         }
                     }
@@ -2369,35 +3257,51 @@ fn extract_one_param(
         Ok(Some(v)) => v.extract().unwrap_or_default(),
         _ => return Ok(ParamExtraction::UseDefault),
     };
-    let source: String = spec.get_item("source")
-        .ok().flatten()
+    let source: String = spec
+        .get_item("source")
+        .ok()
+        .flatten()
         .and_then(|v| v.extract().ok())
         .unwrap_or_else(|| "query".into());
-    let type_kind: String = spec.get_item("type")
-        .ok().flatten()
+    let type_kind: String = spec
+        .get_item("type")
+        .ok()
+        .flatten()
         .and_then(|v| v.extract().ok())
         .unwrap_or_else(|| "str".into());
-    let alias: Option<String> = spec.get_item("alias")
-        .ok().flatten()
+    let alias: Option<String> = spec
+        .get_item("alias")
+        .ok()
+        .flatten()
         .and_then(|v| v.extract().ok());
-    let required: bool = spec.get_item("required")
-        .ok().flatten()
+    let required: bool = spec
+        .get_item("required")
+        .ok()
+        .flatten()
         .and_then(|v| v.extract().ok())
         .unwrap_or(true);
-    let convert_underscores: bool = spec.get_item("convert_underscores")
-        .ok().flatten()
+    let convert_underscores: bool = spec
+        .get_item("convert_underscores")
+        .ok()
+        .flatten()
         .and_then(|v| v.extract().ok())
         .unwrap_or(true);
-    let validators: Option<PyObject> = spec.get_item("validators")
-        .ok().flatten()
+    let validators: Option<PyObject> = spec
+        .get_item("validators")
+        .ok()
+        .flatten()
         .map(|v| v.unbind().into());
 
     // Body is handled in extract_body_params; depends/security in Phase D/E;
     // security_scopes / background_tasks / request are filled by
     // resolve_dependencies.
-    if source == "depends" || source == "body" || source == "security"
-        || source == "security_scopes" || source == "background_tasks"
-        || source == "request" {
+    if source == "depends"
+        || source == "body"
+        || source == "security"
+        || source == "security_scopes"
+        || source == "background_tasks"
+        || source == "request"
+    {
         return Ok(ParamExtraction::UseDefault);
     }
 
@@ -2405,8 +3309,8 @@ fn extract_one_param(
     if source == "form" || source == "file" {
         let key = alias.as_deref().unwrap_or(&name).to_string();
         let raw = form.get_item(&key).ok().flatten();
-        let raw_list: Option<Bound<'_, pyo3::types::PyList>> = raw
-            .and_then(|v| v.downcast_into::<pyo3::types::PyList>().ok());
+        let raw_list: Option<Bound<'_, pyo3::types::PyList>> =
+            raw.and_then(|v| v.downcast_into::<pyo3::types::PyList>().ok());
         // UploadFile single — pass through unmodified.
         if type_kind == "uploadfile" {
             let value = match raw_list.as_ref().and_then(|l| l.get_item(0).ok()) {
@@ -2469,8 +3373,12 @@ fn extract_one_param(
         }
         // Special handling: bytes File (Annotated[bytes, File()]) — read the
         // first UploadFile's contents and pass as bytes.
-        if type_kind == "any" || type_kind == "str" || type_kind == "int"
-            || type_kind == "float" || type_kind == "bool" || type_kind == "uuid"
+        if type_kind == "any"
+            || type_kind == "str"
+            || type_kind == "int"
+            || type_kind == "float"
+            || type_kind == "bool"
+            || type_kind == "uuid"
             || type_kind.starts_with("list[")
         {
             // Form scalar fields go through the scalar/list path below by
@@ -2500,7 +3408,10 @@ fn extract_one_param(
                     let cast = cast_scalar(py, v, inner, "body", &name)?;
                     pylist.append(cast).ok();
                 }
-                return Ok(ParamExtraction::Value { name, value: pylist.unbind().into() });
+                return Ok(ParamExtraction::Value {
+                    name,
+                    value: pylist.unbind().into(),
+                });
             }
             let value = cast_scalar(py, &raw_values[0], &type_kind, "body", &name)?;
             if let Some(validators_obj) = &validators {
@@ -2537,7 +3448,11 @@ fn extract_one_param(
             Some(v) => v.extract::<Vec<String>>().ok(),
             None => None,
         },
-        "header" => match headers.get_item(lookup_key.to_ascii_lowercase()).ok().flatten() {
+        "header" => match headers
+            .get_item(lookup_key.to_ascii_lowercase())
+            .ok()
+            .flatten()
+        {
             // header_lookup is dict[str, list[str]] — same shape as query.
             Some(v) => v.extract::<Vec<String>>().ok(),
             None => None,
@@ -2562,7 +3477,10 @@ fn extract_one_param(
 
     // List type → return a Python list, casting each item.
     if type_kind.starts_with("list[") {
-        let inner = type_kind.strip_prefix("list[").and_then(|s| s.strip_suffix(']')).unwrap_or("str");
+        let inner = type_kind
+            .strip_prefix("list[")
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or("str");
         let pylist = pyo3::types::PyList::empty_bound(py);
         for v in &raw_values {
             let cast = cast_scalar(py, v, inner, &source, &name)?;
@@ -2639,10 +3557,24 @@ fn cast_scalar(
             }
         }
         "uuid" => {
-            let uuid_mod = py.import_bound("uuid").map_err(|_| ValidationErrorEntry::generic(
-                source_static, name, value, "uuid_parsing", "UUID module unavailable"))?;
-            let uuid_class = uuid_mod.getattr("UUID").map_err(|_| ValidationErrorEntry::generic(
-                source_static, name, value, "uuid_parsing", "UUID class unavailable"))?;
+            let uuid_mod = py.import_bound("uuid").map_err(|_| {
+                ValidationErrorEntry::generic(
+                    source_static,
+                    name,
+                    value,
+                    "uuid_parsing",
+                    "UUID module unavailable",
+                )
+            })?;
+            let uuid_class = uuid_mod.getattr("UUID").map_err(|_| {
+                ValidationErrorEntry::generic(
+                    source_static,
+                    name,
+                    value,
+                    "uuid_parsing",
+                    "UUID class unavailable",
+                )
+            })?;
             match uuid_class.call1((value,)) {
                 Ok(u) => Ok(u.unbind().into()),
                 Err(_) => Err(ValidationErrorEntry {
@@ -2678,7 +3610,12 @@ fn run_validators(
     // Numeric comparisons — convert value to f64.
     let numeric_value: Option<f64> = value.bind(py).extract::<f64>().ok();
 
-    if let (Ok(Some(gt)), Some(n)) = (validators.get_item("gt").map(|x| x.and_then(|v| v.extract::<f64>().ok())), numeric_value) {
+    if let (Ok(Some(gt)), Some(n)) = (
+        validators
+            .get_item("gt")
+            .map(|x| x.and_then(|v| v.extract::<f64>().ok())),
+        numeric_value,
+    ) {
         if !(n > gt) {
             return Err(ValidationErrorEntry {
                 err_type: "greater_than",
@@ -2688,7 +3625,12 @@ fn run_validators(
             });
         }
     }
-    if let (Ok(Some(ge)), Some(n)) = (validators.get_item("ge").map(|x| x.and_then(|v| v.extract::<f64>().ok())), numeric_value) {
+    if let (Ok(Some(ge)), Some(n)) = (
+        validators
+            .get_item("ge")
+            .map(|x| x.and_then(|v| v.extract::<f64>().ok())),
+        numeric_value,
+    ) {
         if !(n >= ge) {
             return Err(ValidationErrorEntry {
                 err_type: "greater_than_equal",
@@ -2698,7 +3640,12 @@ fn run_validators(
             });
         }
     }
-    if let (Ok(Some(lt)), Some(n)) = (validators.get_item("lt").map(|x| x.and_then(|v| v.extract::<f64>().ok())), numeric_value) {
+    if let (Ok(Some(lt)), Some(n)) = (
+        validators
+            .get_item("lt")
+            .map(|x| x.and_then(|v| v.extract::<f64>().ok())),
+        numeric_value,
+    ) {
         if !(n < lt) {
             return Err(ValidationErrorEntry {
                 err_type: "less_than",
@@ -2708,7 +3655,12 @@ fn run_validators(
             });
         }
     }
-    if let (Ok(Some(le)), Some(n)) = (validators.get_item("le").map(|x| x.and_then(|v| v.extract::<f64>().ok())), numeric_value) {
+    if let (Ok(Some(le)), Some(n)) = (
+        validators
+            .get_item("le")
+            .map(|x| x.and_then(|v| v.extract::<f64>().ok())),
+        numeric_value,
+    ) {
         if !(n <= le) {
             return Err(ValidationErrorEntry {
                 err_type: "less_than_equal",
@@ -2721,7 +3673,12 @@ fn run_validators(
 
     // String length / pattern.
     let str_value: Option<String> = value.bind(py).extract::<String>().ok();
-    if let (Ok(Some(min_len)), Some(s)) = (validators.get_item("min_length").map(|x| x.and_then(|v| v.extract::<usize>().ok())), &str_value) {
+    if let (Ok(Some(min_len)), Some(s)) = (
+        validators
+            .get_item("min_length")
+            .map(|x| x.and_then(|v| v.extract::<usize>().ok())),
+        &str_value,
+    ) {
         if s.chars().count() < min_len {
             return Err(ValidationErrorEntry {
                 err_type: "string_too_short",
@@ -2731,7 +3688,12 @@ fn run_validators(
             });
         }
     }
-    if let (Ok(Some(max_len)), Some(s)) = (validators.get_item("max_length").map(|x| x.and_then(|v| v.extract::<usize>().ok())), &str_value) {
+    if let (Ok(Some(max_len)), Some(s)) = (
+        validators
+            .get_item("max_length")
+            .map(|x| x.and_then(|v| v.extract::<usize>().ok())),
+        &str_value,
+    ) {
         if s.chars().count() > max_len {
             return Err(ValidationErrorEntry {
                 err_type: "string_too_long",
@@ -2741,7 +3703,12 @@ fn run_validators(
             });
         }
     }
-    if let (Ok(Some(pattern)), Some(s)) = (validators.get_item("pattern").map(|x| x.and_then(|v| v.extract::<String>().ok())), &str_value) {
+    if let (Ok(Some(pattern)), Some(s)) = (
+        validators
+            .get_item("pattern")
+            .map(|x| x.and_then(|v| v.extract::<String>().ok())),
+        &str_value,
+    ) {
         // Use Python's `re.fullmatch` so behavior matches FastAPI/Pydantic exactly.
         let re_mod = py.import_bound("re").ok();
         if let Some(re_mod) = re_mod {

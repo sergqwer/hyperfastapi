@@ -29,7 +29,11 @@ macro_rules! make_param {
         impl $rust_name {
             #[new]
             #[pyo3(signature = (default = None, /, **kwargs))]
-            fn new(py: Python<'_>, default: Option<PyObject>, kwargs: Option<&Bound<'_, PyDict>>) -> Self {
+            fn new(
+                py: Python<'_>,
+                default: Option<PyObject>,
+                kwargs: Option<&Bound<'_, PyDict>>,
+            ) -> Self {
                 let kw_obj = match kwargs {
                     Some(k) => k.clone().unbind().into(),
                     None => PyDict::new_bound(py).unbind().into(),
@@ -92,10 +96,7 @@ impl Depends {
 
     fn __repr__(&self) -> String {
         let has = self.dependency.lock().is_some();
-        format!(
-            "Depends({})",
-            if has { "<dependency>" } else { "None" }
-        )
+        format!("Depends({})", if has { "<dependency>" } else { "None" })
     }
 }
 

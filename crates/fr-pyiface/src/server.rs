@@ -62,9 +62,9 @@ pub fn run_native(
     // re-acquire it when it needs to call into Python.
     py.allow_threads(move || -> PyResult<()> {
         rt.block_on(async move {
-            let listener = TcpListener::bind(addr).await.map_err(|e| {
-                pyo3::exceptions::PyOSError::new_err(format!("bind {addr}: {e}"))
-            })?;
+            let listener = TcpListener::bind(addr)
+                .await
+                .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("bind {addr}: {e}")))?;
             eprintln!("[hyperfastapi] listening on http://{}", addr);
 
             loop {
@@ -120,7 +120,10 @@ fn intern_dispatch_native(py: Python<'_>) -> Bound<'_, pyo3::types::PyString> {
     use once_cell::sync::OnceCell;
     static CACHE: OnceCell<PyObject> = OnceCell::new();
     if let Some(obj) = CACHE.get() {
-        return obj.bind(py).clone().downcast_into::<pyo3::types::PyString>()
+        return obj
+            .bind(py)
+            .clone()
+            .downcast_into::<pyo3::types::PyString>()
             .expect("cached _dispatch_native name is a str");
     }
     let s = pyo3::intern!(py, "_dispatch_native").to_owned();
@@ -160,30 +163,38 @@ async fn handle_request(
     // the ASGI path: routing, deps, validation, handler, response_model,
     // JSON serialize. The only thing we skip is the ASGI middleware stack
     // (CORS, GZip, etc.) — for max-perf benchmarks that's the point.
-    let result: Result<(u16, Vec<(String, String)>, Vec<u8>), String> =
-        Python::with_gil(|py| {
-            let app_obj = app.app.bind(py);
-            // Single fused entry point — _dispatch_native does bg reset + the
-            // full _dispatch in one PyO3 call (saves a getattr + a call vs
-            // two separate Python entries).
-            let dispatch = app_obj
-                .getattr(intern_dispatch_native(py))
+    let result: Result<(u16, Vec<(String, String)>, Vec<u8>), String> = Python::with_gil(|py| {
+        let app_obj = app.app.bind(py);
+        // Single fused entry point — _dispatch_native does bg reset + the
+        // full _dispatch in one PyO3 call (saves a getattr + a call vs
+        // two separate Python entries).
+        let dispatch = app_obj
+            .getattr(intern_dispatch_native(py))
+            .map_err(|e| e.to_string())?;
+        let py_headers = PyList::empty_bound(py);
+        for (k, v) in &headers {
+            py_headers
+                .append(pyo3::types::PyTuple::new_bound(
+                    py,
+                    [k.as_str(), v.as_str()],
+                ))
                 .map_err(|e| e.to_string())?;
-            let py_headers = PyList::empty_bound(py);
-            for (k, v) in &headers {
-                py_headers
-                    .append(pyo3::types::PyTuple::new_bound(py, [k.as_str(), v.as_str()]))
-                    .map_err(|e| e.to_string())?;
-            }
-            let py_body = PyBytes::new_bound(py, &body_bytes);
+        }
+        let py_body = PyBytes::new_bound(py, &body_bytes);
 
-            let tup = dispatch
-                .call1((method.as_str(), path.as_str(), query.as_str(), &py_headers, py_body))
-                .map_err(|e| e.to_string())?;
-            let (status, hdrs, body): (u16, Vec<(String, String)>, Vec<u8>) =
-                tup.extract().map_err(|e| e.to_string())?;
-            Ok((status, hdrs, body))
-        });
+        let tup = dispatch
+            .call1((
+                method.as_str(),
+                path.as_str(),
+                query.as_str(),
+                &py_headers,
+                py_body,
+            ))
+            .map_err(|e| e.to_string())?;
+        let (status, hdrs, body): (u16, Vec<(String, String)>, Vec<u8>) =
+            tup.extract().map_err(|e| e.to_string())?;
+        Ok((status, hdrs, body))
+    });
 
     let (status, hdrs, body) = match result {
         Ok(r) => r,
@@ -201,8 +212,8 @@ async fn handle_request(
         }
     };
 
-    let mut builder = HyperResponse::builder()
-        .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
+    let mut builder =
+        HyperResponse::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
     for (k, v) in hdrs {
         builder = builder.header(k, v);
     }
