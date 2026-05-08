@@ -85,15 +85,21 @@ jobs:
         run: |
           python -m pytest tests/conformance -q --tb=short
 
-      # perf-light: single short scenario so PRs catch catastrophic regressions
-      # without paying the full 5-min perf-suite cost. Heavy perf is nightly.
+      # perf-light: single short scenario, INFORMATIONAL ONLY. Real perf
+      # gate is the nightly job below. We don't fail PR CI on perf since
+      # GH-hosted runners are noisy and bombardier isn't pre-installed
+      # on every OS image.
       - name: Perf smoke (get_plain, 5s)
-        if: matrix.os != 'macos-latest'  # macOS runners lack pinning + bombardier in PATH
+        if: matrix.os == 'ubuntu-latest'
+        continue-on-error: true
         env:
           HYPERFASTAPI_AS_FASTAPI: "1"
         run: |
-          python -m pip install bombardier-py || true
-          python tests/perf/runner.py --scenario get_plain --mode single --duration 5 || echo "Perf smoke is informational; failures don't block."
+          curl -sL -o /tmp/bombardier https://github.com/codesenberg/bombardier/releases/download/v1.2.6/bombardier-linux-amd64
+          chmod +x /tmp/bombardier
+          mkdir -p tests/perf/bin
+          cp /tmp/bombardier tests/perf/bin/bombardier
+          python tests/perf/runner.py --scenario get_plain --mode single --duration 5
 
   # Heavy perf gate runs on a dedicated runner nightly. Fails the build if
   # any scenario regresses below its declared min_rps_single threshold.
