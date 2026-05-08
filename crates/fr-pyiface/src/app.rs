@@ -24,6 +24,10 @@ pub(crate) struct Route {
     pub include_in_schema: bool,
     pub summary: Option<String>,
     pub description: Option<String>,
+    /// (param_name, kind_str) pairs for params the dispatch should extract.
+    /// Phase B-2: path-only ("path:int", "path:str", etc.). Phase B-3 extends
+    /// with "query:*", "header:*", "cookie:*". Phase C adds "body:*".
+    pub param_plan: Vec<(String, String)>,
 }
 
 /// Callable class returned by `app.get("/")` etc. Calling it with the user's
@@ -44,7 +48,8 @@ pub struct RouteDecorator {
 
 #[pymethods]
 impl RouteDecorator {
-    fn __call__(&self, py: Python<'_>, func: PyObject) -> PyObject {
+    fn __call__(&self, py: Python<'_>, func: PyObject) -> PyResult<PyObject> {
+        let plan = compile_route_plan(py, &func, &self.path).unwrap_or_default();
         self.routes.lock().push(Route {
             method: self.method.clone(),
             path: self.path.clone(),
@@ -56,9 +61,25 @@ impl RouteDecorator {
             include_in_schema: self.include_in_schema,
             summary: self.summary.clone(),
             description: self.description.clone(),
+            param_plan: plan,
         });
-        func
+        Ok(func)
     }
+}
+
+/// Inspect handler's Python signature via `fastapi_rust._routing.compile_route_plan`.
+/// Returns the list of `(name, kind_str)` for each param the dispatch should
+/// extract. On any failure, returns empty plan — handler runs with no kwargs.
+fn compile_route_plan(
+    py: Python<'_>,
+    handler: &PyObject,
+    path: &str,
+) -> PyResult<Vec<(String, String)>> {
+    let routing_mod = py.import_bound("fastapi_rust._routing")?;
+    let compiler = routing_mod.getattr("compile_route_plan")?;
+    let result = compiler.call1((handler.clone_ref(py), path))?;
+    let plan: Vec<(String, String)> = result.extract()?;
+    Ok(plan)
 }
 
 #[pyclass(name = "FastAPI", module = "fastapi_rust._core", subclass)]
@@ -256,6 +277,9 @@ impl FastAPI {
         }
     }
 
+    /// Phase B-2 extension: alternative `_dispatch` is now in module-level dispatch
+    /// but we keep the route-level fields in sync — see below.
+
     fn middleware(&self, _kind: String) -> IdentityDecorator { IdentityDecorator }
     fn exception_handler(&self, _exc: PyObject) -> IdentityDecorator { IdentityDecorator }
     fn on_event(&self, _event: String) -> IdentityDecorator { IdentityDecorator }
@@ -268,6 +292,7 @@ impl FastAPI {
     #[pyo3(signature = (path, endpoint, *, methods = None, **_kwargs))]
     fn add_api_route(&self, py: Python<'_>, path: String, endpoint: PyObject, methods: Option<Vec<String>>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
         let methods = methods.unwrap_or_else(|| vec!["GET".into()]);
+        let plan = compile_route_plan(py, &endpoint, &path).unwrap_or_default();
         let mut routes = self.routes.lock();
         for method in methods {
             routes.push(Route {
@@ -281,6 +306,7 @@ impl FastAPI {
                 include_in_schema: true,
                 summary: None,
                 description: None,
+                param_plan: plan.clone(),
             });
         }
         Ok(())
@@ -319,6 +345,7 @@ impl FastAPI {
                 include_in_schema: r.include_in_schema && include_in_schema,
                 summary: r.summary.clone(),
                 description: r.description.clone(),
+                param_plan: r.param_plan.clone(),
             });
         }
         Ok(())
@@ -428,37 +455,42 @@ impl FastAPI {
             }
         }
 
-        // Find a matching route. Two-pass: exact method first, then HEAD→GET fallback.
-        let (handler, status_code, response_model);
+        // Find a matching route via path-template matching.
+        // Two-pass: exact method first, then HEAD→GET fallback.
+        let (handler, status_code, response_model, param_plan, path_params);
         {
             let routes = self.routes.lock();
             let mut path_exists = false;
-            let mut found: Option<usize> = None;
+            let mut method_match: Option<(usize, Vec<(String, String)>)> = None;
 
             for (i, r) in routes.iter().enumerate() {
-                if r.path == path {
+                if let Some(params) = match_path_template(&r.path, &path) {
                     path_exists = true;
                     if r.method == method {
-                        found = Some(i);
+                        method_match = Some((i, params));
                         break;
                     }
                 }
             }
-            if found.is_none() && method == "HEAD" {
+            if method_match.is_none() && method == "HEAD" {
                 for (i, r) in routes.iter().enumerate() {
-                    if r.path == path && r.method == "GET" {
-                        found = Some(i);
-                        break;
+                    if r.method == "GET" {
+                        if let Some(params) = match_path_template(&r.path, &path) {
+                            method_match = Some((i, params));
+                            break;
+                        }
                     }
                 }
             }
 
-            match found {
-                Some(i) => {
+            match method_match {
+                Some((i, params)) => {
                     let r = &routes[i];
                     handler = r.handler.clone_ref(py);
                     status_code = r.status_code.unwrap_or(200) as u16;
                     response_model = r.response_model.as_ref().map(|p| p.clone_ref(py));
+                    param_plan = r.param_plan.clone();
+                    path_params = params;
                 }
                 None => {
                     drop(routes);
@@ -478,8 +510,31 @@ impl FastAPI {
             }
         }
 
-        // Call the handler with no args (Phase B-1 limitation).
-        let result = handler.call0(py)?;
+        // Build kwargs from the param plan, accumulating validation errors.
+        let kwargs = PyDict::new_bound(py);
+        let mut errors: Vec<ValidationErrorEntry> = Vec::new();
+        for (name, kind) in &param_plan {
+            let raw = path_params.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
+            if let Some(value) = raw {
+                match cast_path_param(py, value, kind, name) {
+                    Ok(py_obj) => {
+                        kwargs.set_item(name, py_obj)?;
+                    }
+                    Err(err) => errors.push(err),
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return build_validation_error_response(py, &errors);
+        }
+
+        // Call the handler with extracted path-param kwargs.
+        let result = if kwargs.is_empty() {
+            handler.call0(py)?
+        } else {
+            handler.call_bound(py, (), Some(&kwargs))?
+        };
         let is_head = method == "HEAD";
 
         // Detect Starlette Response — handler returned a fully-formed response.
@@ -638,6 +693,7 @@ impl APIRouter {
                 include_in_schema: r.include_in_schema,
                 summary: r.summary.clone(),
                 description: r.description.clone(),
+                param_plan: r.param_plan.clone(),
             });
         }
         Ok(())
@@ -690,7 +746,8 @@ pub struct ApiRouteDecorator {
 
 #[pymethods]
 impl ApiRouteDecorator {
-    fn __call__(&self, py: Python<'_>, func: PyObject) -> PyObject {
+    fn __call__(&self, py: Python<'_>, func: PyObject) -> PyResult<PyObject> {
+        let plan = compile_route_plan(py, &func, &self.path).unwrap_or_default();
         let mut routes = self.routes.lock();
         for method in &self.methods {
             routes.push(Route {
@@ -704,9 +761,10 @@ impl ApiRouteDecorator {
                 include_in_schema: true,
                 summary: None,
                 description: None,
+                param_plan: plan.clone(),
             });
         }
-        func
+        Ok(func)
     }
 }
 
@@ -815,4 +873,185 @@ fn serialize_value_to_json(py: Python<'_>, value: &PyObject) -> PyResult<Vec<u8>
     let result = dumps.call((value.clone_ref(py),), Some(&kwargs))?;
     let s: String = result.extract()?;
     Ok(s.into_bytes())
+}
+
+// ---------- Phase B-2: path matching + casting -----------------------------
+
+/// Match an incoming request `path` against a registered template like
+/// `/items/{item_id}` or `/files/{file_path:path}`. Returns the extracted
+/// `(name, value)` pairs in template order, or `None` if the path doesn't
+/// match the template.
+///
+/// Catch-all syntax: `{name:path}` consumes the rest of the URL, including
+/// any slashes. Plain `{name}` matches a single path segment.
+fn match_path_template(template: &str, path: &str) -> Option<Vec<(String, String)>> {
+    // Fast path: no placeholders at all → bytewise equality.
+    if !template.contains('{') {
+        return if template == path { Some(Vec::new()) } else { None };
+    }
+
+    // Split by '/' so each segment can be matched / captured independently.
+    let template_segs: Vec<&str> = template.split('/').collect();
+    let path_segs: Vec<&str> = path.split('/').collect();
+
+    let mut params: Vec<(String, String)> = Vec::with_capacity(2);
+
+    let mut t_idx = 0usize;
+    let mut p_idx = 0usize;
+
+    while t_idx < template_segs.len() {
+        let t_seg = template_segs[t_idx];
+
+        if t_seg.starts_with('{') && t_seg.ends_with('}') {
+            let inner = &t_seg[1..t_seg.len() - 1];
+            let (name, type_hint) = match inner.split_once(':') {
+                Some((n, ty)) => (n, Some(ty)),
+                None => (inner, None),
+            };
+
+            if matches!(type_hint, Some("path")) {
+                // Catch-all: consume everything remaining in the path. Even if
+                // we're at the last template segment, we accept the rest of the
+                // URL, slashes included.
+                if p_idx >= path_segs.len() {
+                    return None;
+                }
+                let rest = path_segs[p_idx..].join("/");
+                params.push((name.to_string(), rest));
+                return Some(params);
+            }
+
+            // Single-segment placeholder.
+            if p_idx >= path_segs.len() {
+                return None;
+            }
+            params.push((name.to_string(), path_segs[p_idx].to_string()));
+        } else {
+            // Literal segment must match exactly.
+            if p_idx >= path_segs.len() || path_segs[p_idx] != t_seg {
+                return None;
+            }
+        }
+        t_idx += 1;
+        p_idx += 1;
+    }
+
+    // Both must be fully consumed.
+    if p_idx == path_segs.len() {
+        Some(params)
+    } else {
+        None
+    }
+}
+
+/// Cast a raw path-param string to a typed Python value, or build a Pydantic-v2
+/// shaped validation error if the cast fails.
+fn cast_path_param(
+    py: Python<'_>,
+    value: &str,
+    kind: &str,
+    name: &str,
+) -> Result<PyObject, ValidationErrorEntry> {
+    match kind {
+        "path:int" => match value.parse::<i64>() {
+            Ok(n) => Ok(n.into_py(py)),
+            Err(_) => Err(ValidationErrorEntry {
+                err_type: "int_parsing",
+                loc: ("path", name.to_string()),
+                msg: "Input should be a valid integer, unable to parse string as an integer",
+                input: value.to_string(),
+            }),
+        },
+        "path:float" => match value.parse::<f64>() {
+            Ok(n) => Ok(n.into_py(py)),
+            Err(_) => Err(ValidationErrorEntry {
+                err_type: "float_parsing",
+                loc: ("path", name.to_string()),
+                msg: "Input should be a valid number, unable to parse string as a number",
+                input: value.to_string(),
+            }),
+        },
+        "path:bool" => {
+            let lc = value.to_ascii_lowercase();
+            match lc.as_str() {
+                "true" | "1" | "yes" | "on" => Ok(true.into_py(py)),
+                "false" | "0" | "no" | "off" => Ok(false.into_py(py)),
+                _ => Err(ValidationErrorEntry {
+                    err_type: "bool_parsing",
+                    loc: ("path", name.to_string()),
+                    msg: "Input should be a valid boolean, unable to interpret input",
+                    input: value.to_string(),
+                }),
+            }
+        }
+        "path:uuid" => {
+            let uuid_mod = py
+                .import_bound("uuid")
+                .map_err(|_| ValidationErrorEntry::generic("path", name, value, "uuid_parsing", "UUID module unavailable"))?;
+            let uuid_class = uuid_mod
+                .getattr("UUID")
+                .map_err(|_| ValidationErrorEntry::generic("path", name, value, "uuid_parsing", "UUID class unavailable"))?;
+            match uuid_class.call1((value,)) {
+                Ok(u) => Ok(u.unbind().into()),
+                Err(_) => Err(ValidationErrorEntry {
+                    err_type: "uuid_parsing",
+                    loc: ("path", name.to_string()),
+                    msg: "Input should be a valid UUID, unable to parse string as a UUID",
+                    input: value.to_string(),
+                }),
+            }
+        }
+        // "path:str", "path:any", or unknown — pass through verbatim.
+        _ => Ok(value.into_py(py)),
+    }
+}
+
+/// Pydantic-v2 shaped validation error entry. `err_type` is the machine
+/// identifier (`"int_parsing"`, `"missing"`, ...); `loc` is a tuple like
+/// `("path", "item_id")`; `msg` is human-readable; `input` is the offending value.
+pub(crate) struct ValidationErrorEntry {
+    pub err_type: &'static str,
+    pub loc: (&'static str, String),
+    pub msg: &'static str,
+    pub input: String,
+}
+
+impl ValidationErrorEntry {
+    fn generic(loc_kind: &'static str, name: &str, input: &str, err_type: &'static str, msg: &'static str) -> Self {
+        Self {
+            err_type,
+            loc: (loc_kind, name.to_string()),
+            msg,
+            input: input.to_string(),
+        }
+    }
+
+    fn to_py_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        d.set_item("type", self.err_type)?;
+        let loc_list = pyo3::types::PyList::new_bound(py, [self.loc.0, &self.loc.1]);
+        d.set_item("loc", loc_list)?;
+        d.set_item("msg", self.msg)?;
+        d.set_item("input", &self.input)?;
+        Ok(d)
+    }
+}
+
+fn build_validation_error_response(
+    py: Python<'_>,
+    errors: &[ValidationErrorEntry],
+) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
+    let detail = pyo3::types::PyList::empty_bound(py);
+    for err in errors {
+        detail.append(err.to_py_dict(py)?)?;
+    }
+    let body = PyDict::new_bound(py);
+    body.set_item("detail", detail)?;
+    let body_obj: PyObject = body.unbind().into();
+    let json_bytes = serialize_value_to_json(py, &body_obj)?;
+    Ok((
+        422,
+        vec![("content-type".into(), "application/json".into())],
+        json_bytes,
+    ))
 }
