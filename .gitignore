@@ -42,3 +42,12 @@ Thumbs.db
 # External reference code (cloned separately, not part of our history)
 # To populate: git clone --depth=1 https://github.com/fastapi/fastapi.git reference/fastapi
 reference/
+
+# Test results (per-run JSON, regenerated locally and in CI)
+tests/results/
+
+# Bombardier binary (downloaded separately; not committed)
+tests/perf/bin/
+
+# Coverage HTML report
+htmlcov/

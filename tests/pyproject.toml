@@ -1,0 +1,50 @@
+[project]
+name = "fastapi-rust-tests"
+version = "0.1.0"
+description = "Conformance and performance test suite for FastAPI baseline and future Rust port"
+requires-python = ">=3.10"
+dependencies = [
+    # Framework under test (baseline; later swapped for Rust port via import hook)
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.5.0",
+    "python-multipart>=0.0.9",
+    "pyjwt>=2.9.0",
+    "jinja2>=3.1.0",
+    # Test framework
+    "pytest>=9.0.0",
+    "pytest-xdist[psutil]>=3.5.0",
+    "pytest-cov>=4.0.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-sugar>=1.0.0",
+    "anyio[trio]>=4.0.0",
+    "dirty-equals>=0.9.0",
+    "inline-snapshot>=0.21.1",
+    "psutil>=5.9.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["conformance", "perf"]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "-ra",
+]
+markers = [
+    "perf_single: performance test in single-process mode (1 worker, pinned to one core)",
+    "perf_multi: performance test in process-per-core mode (N workers across all cores)",
+    "slow: tests that take more than ~1 second to run",
+    "type_fidelity: explicit type-correctness checks (content-type, bytes-vs-str, encoding)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:pydantic.*",
+]
+timeout = 30
