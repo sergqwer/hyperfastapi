@@ -352,9 +352,17 @@ class FastAPI(_RustFastAPI):
         # routes to the registered handler. We construct a Starlette Request
         # eagerly so handlers declaring ``request: Request`` get a real one.
         request_obj = Request(scope, receive=receive)
-        status, headers, response_body, background = await self._dispatch_async(
+        status, headers, response_body, background, raw_resp = await self._dispatch_async(
             method, path, query_string, headers_list, bytes(body), request_obj
         )
+
+        # Phase F+: handler returned a StreamingResponse/FileResponse. Drive
+        # it natively so async-only bodies can stream.
+        if raw_resp is not None:
+            if background is not None and getattr(raw_resp, "background", None) is None:
+                raw_resp.background = background
+            await raw_resp(scope, receive, send)
+            return
 
         headers_bytes: list[tuple[bytes, bytes]] = [
             (k.encode("latin-1"), v.encode("latin-1")) for k, v in headers
@@ -414,23 +422,30 @@ class FastAPI(_RustFastAPI):
         headers_list: list[tuple[str, str]],
         body: bytes,
         request: Any = None,
-    ) -> tuple[int, list[tuple[str, str]], bytes, Any]:
+    ) -> tuple[int, list[tuple[str, str]], bytes, Any, Any]:
         """Wrap the sync Rust dispatcher. ``request`` is a Starlette Request
         constructed by the ASGI layer; it's stashed so handler params declared
         as ``request: Request`` can receive it.
+
+        Returns ``(status, headers, body, background, raw_response)``. When
+        ``raw_response`` is not None, the ASGI layer drives it directly; when
+        it is None, the ``status/headers/body`` triple is sent as-is.
         """
         from . import _bg as bg_state
         bg_state._current_tasks = None
         bg_state._current_request = request
+        bg_state._current_raw_response = None
         try:
             status, headers, response_body = self._dispatch(
                 method, path, query_string, headers_list, body
             )
             tasks = bg_state._current_tasks
-            return status, headers, response_body, tasks
+            raw_resp = bg_state._current_raw_response
+            return status, headers, response_body, tasks, raw_resp
         finally:
             bg_state._current_tasks = None
             bg_state._current_request = None
+            bg_state._current_raw_response = None
 
 
 __all__ = ["FastAPI"]

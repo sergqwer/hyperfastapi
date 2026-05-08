@@ -12,3 +12,8 @@ from typing import Any
 
 _current_tasks: Any = None
 _current_request: Any = None
+# Phase F+: when a handler returns a StreamingResponse or FileResponse, the
+# Rust dispatcher stashes the raw Response object here and the ASGI layer
+# drives it via ``await response(scope, receive, send)`` instead of trying to
+# unpack the body bytes.
+_current_raw_response: Any = None
