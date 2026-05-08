@@ -24,10 +24,11 @@ pub(crate) struct Route {
     pub include_in_schema: bool,
     pub summary: Option<String>,
     pub description: Option<String>,
-    /// (param_name, kind_str) pairs for params the dispatch should extract.
-    /// Phase B-2: path-only ("path:int", "path:str", etc.). Phase B-3 extends
-    /// with "query:*", "header:*", "cookie:*". Phase C adds "body:*".
-    pub param_plan: Vec<(String, String)>,
+    /// One entry per handler param the dispatch should extract; each entry
+    /// is a Python dict of `{name, source, type, default, alias, required,
+    /// validators, convert_underscores}` produced by
+    /// `fastapi_rust._routing.compile_route_plan` at decorator time.
+    pub param_plan: Vec<PyObject>,
 }
 
 /// Callable class returned by `app.get("/")` etc. Calling it with the user's
@@ -68,18 +69,28 @@ impl RouteDecorator {
 }
 
 /// Inspect handler's Python signature via `fastapi_rust._routing.compile_route_plan`.
-/// Returns the list of `(name, kind_str)` for each param the dispatch should
-/// extract. On any failure, returns empty plan — handler runs with no kwargs.
+/// Each entry is a Python dict; we keep it as PyObject and extract fields at
+/// dispatch time (Phase J can pre-parse if profiling shows it matters).
 fn compile_route_plan(
     py: Python<'_>,
     handler: &PyObject,
     path: &str,
-) -> PyResult<Vec<(String, String)>> {
+) -> PyResult<Vec<PyObject>> {
     let routing_mod = py.import_bound("fastapi_rust._routing")?;
     let compiler = routing_mod.getattr("compile_route_plan")?;
     let result = compiler.call1((handler.clone_ref(py), path))?;
-    let plan: Vec<(String, String)> = result.extract()?;
-    Ok(plan)
+    let list = result.downcast_into::<pyo3::types::PyList>()?;
+    let mut out = Vec::with_capacity(list.len());
+    for item in list.iter() {
+        out.push(item.unbind().into());
+    }
+    Ok(out)
+}
+
+/// Helper to clone a Vec<PyObject> by cloning each reference. Used in
+/// include_router etc. — Vec<PyObject> doesn't impl Clone since PyObject doesn't.
+fn clone_param_plan(py: Python<'_>, plan: &[PyObject]) -> Vec<PyObject> {
+    plan.iter().map(|p| p.clone_ref(py)).collect()
 }
 
 #[pyclass(name = "FastAPI", module = "fastapi_rust._core", subclass)]
@@ -306,7 +317,7 @@ impl FastAPI {
                 include_in_schema: true,
                 summary: None,
                 description: None,
-                param_plan: plan.clone(),
+                param_plan: clone_param_plan(py, &plan),
             });
         }
         Ok(())
@@ -345,7 +356,7 @@ impl FastAPI {
                 include_in_schema: r.include_in_schema && include_in_schema,
                 summary: r.summary.clone(),
                 description: r.description.clone(),
-                param_plan: r.param_plan.clone(),
+                param_plan: clone_param_plan(py, &r.param_plan),
             });
         }
         Ok(())
@@ -397,20 +408,24 @@ impl FastAPI {
         Ok(dict.unbind().into())
     }
 
-    /// Phase B-1 dispatch — linear search by (method, path), call handler with
-    /// no args, serialize result. Returns (status, headers, body).
+    /// Phase B-3 dispatch. Linear-search routes by template, extract params
+    /// from path/query/header/cookie based on the compiled plan, cast types,
+    /// validate, call handler, serialize response.
     ///
-    /// Note: Phase B-1 ignores request body and path/query/header params.
-    /// Phase B-2 adds path matching, Phase B-3 adds query/header/cookie.
-    #[pyo3(signature = (method, path, body = None))]
+    /// `query_string`: raw bytes-as-str (we URL-decode via `urllib.parse.parse_qs`).
+    /// `headers`: list of (name, value) tuples from ASGI scope.
+    /// `body`: bytes of the request body (Phase C wires body parsing).
+    #[pyo3(signature = (method, path, query_string = None, headers = None, body = None))]
     fn _dispatch(
         &self,
         py: Python<'_>,
         method: String,
         path: String,
+        query_string: Option<String>,
+        headers: Option<Vec<(String, String)>>,
         body: Option<&Bound<'_, PyBytes>>,
     ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
-        let _ = body; // Phase B-2 will use it
+        let _ = body; // Phase C will use it
 
         // Auto-serve OpenAPI schema at the configured `openapi_url`. Phase H
         // will replace this with a properly-cached pre-built schema.
@@ -489,7 +504,7 @@ impl FastAPI {
                     handler = r.handler.clone_ref(py);
                     status_code = r.status_code.unwrap_or(200) as u16;
                     response_model = r.response_model.as_ref().map(|p| p.clone_ref(py));
-                    param_plan = r.param_plan.clone();
+                    param_plan = clone_param_plan(py, &r.param_plan);
                     path_params = params;
                 }
                 None => {
@@ -510,18 +525,81 @@ impl FastAPI {
             }
         }
 
+        // ---- Build dispatch contexts (parsed once per request) ----------
+        // Query: parsed via urllib.parse.parse_qs to handle URL-decoding +
+        // multi-values correctly. Returns dict[str, list[str]].
+        let query_dict: Bound<'_, PyDict> = if let Some(qs) = query_string.as_deref() {
+            if qs.is_empty() {
+                PyDict::new_bound(py)
+            } else {
+                let urllib = py.import_bound("urllib.parse")?;
+                let parse_qs = urllib.getattr("parse_qs")?;
+                let kw = PyDict::new_bound(py);
+                kw.set_item("keep_blank_values", true)?;
+                let parsed = parse_qs.call((qs,), Some(&kw))?;
+                parsed.downcast_into::<PyDict>().map_err(|e| pyo3::PyErr::from(e))?
+            }
+        } else {
+            PyDict::new_bound(py)
+        };
+
+        // Headers: case-insensitive lookup map (lowercase → list of values).
+        // Multiple headers with the same name (X-Tag: a; X-Tag: b arriving
+        // as two separate header tuples) collected into a list — required
+        // for `Annotated[list[str], Header()]` params.
+        let header_lookup: Bound<'_, PyDict> = PyDict::new_bound(py);
+        let header_list: Vec<(String, String)> = headers.unwrap_or_default();
+        for (k, v) in &header_list {
+            let key = k.to_ascii_lowercase();
+            match header_lookup.get_item(&key)? {
+                Some(existing) => {
+                    existing.call_method1("append", (v,))?;
+                }
+                None => {
+                    let lst = pyo3::types::PyList::empty_bound(py);
+                    lst.append(v)?;
+                    header_lookup.set_item(key, lst)?;
+                }
+            }
+        }
+
+        // Cookies: parse the Cookie header(s) into name → value map.
+        let cookie_dict: Bound<'_, PyDict> = PyDict::new_bound(py);
+        if let Some(cookie_list) = header_lookup.get_item("cookie")? {
+            if let Ok(values) = cookie_list.extract::<Vec<String>>() {
+                for s in values {
+                    for chunk in s.split(';') {
+                        let chunk = chunk.trim();
+                        if let Some((k, v)) = chunk.split_once('=') {
+                            cookie_dict.set_item(k.trim(), v.trim())?;
+                        }
+                    }
+                }
+            }
+        }
+
         // Build kwargs from the param plan, accumulating validation errors.
         let kwargs = PyDict::new_bound(py);
         let mut errors: Vec<ValidationErrorEntry> = Vec::new();
-        for (name, kind) in &param_plan {
-            let raw = path_params.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
-            if let Some(value) = raw {
-                match cast_path_param(py, value, kind, name) {
-                    Ok(py_obj) => {
-                        kwargs.set_item(name, py_obj)?;
-                    }
-                    Err(err) => errors.push(err),
+        for spec_obj in &param_plan {
+            let spec: Bound<'_, pyo3::types::PyAny> = spec_obj.bind(py).clone();
+            let spec_dict = match spec.downcast::<PyDict>() {
+                Ok(d) => d.clone(),
+                Err(_) => continue,
+            };
+            match extract_one_param(
+                py,
+                &spec_dict,
+                &path_params,
+                &query_dict,
+                &header_lookup,
+                &cookie_dict,
+            ) {
+                Ok(ParamExtraction::Value { name, value }) => {
+                    kwargs.set_item(name, value)?;
                 }
+                Ok(ParamExtraction::UseDefault) => {}
+                Err(err) => errors.push(err),
             }
         }
 
@@ -529,7 +607,7 @@ impl FastAPI {
             return build_validation_error_response(py, &errors);
         }
 
-        // Call the handler with extracted path-param kwargs.
+        // Call the handler with extracted kwargs.
         let result = if kwargs.is_empty() {
             handler.call0(py)?
         } else {
@@ -693,7 +771,7 @@ impl APIRouter {
                 include_in_schema: r.include_in_schema,
                 summary: r.summary.clone(),
                 description: r.description.clone(),
-                param_plan: r.param_plan.clone(),
+                param_plan: clone_param_plan(py, &r.param_plan),
             });
         }
         Ok(())
@@ -761,7 +839,7 @@ impl ApiRouteDecorator {
                 include_in_schema: true,
                 summary: None,
                 description: None,
-                param_plan: plan.clone(),
+                param_plan: clone_param_plan(py, &plan),
             });
         }
         Ok(func)
@@ -1054,4 +1132,317 @@ fn build_validation_error_response(
         vec![("content-type".into(), "application/json".into())],
         json_bytes,
     ))
+}
+
+// ---------- Phase B-3: query / header / cookie extraction ------------------
+
+pub(crate) enum ParamExtraction {
+    /// Extracted a value from the request — pass to the handler under `name`.
+    Value { name: String, value: PyObject },
+    /// No value found and the param has a Python default — let the handler's
+    /// own default kick in, don't add it to kwargs.
+    UseDefault,
+}
+
+/// Walk one entry of the compiled param plan and produce a typed Python value
+/// or a validation error.
+fn extract_one_param(
+    py: Python<'_>,
+    spec: &Bound<'_, PyDict>,
+    path_params: &[(String, String)],
+    query: &Bound<'_, PyDict>,
+    headers: &Bound<'_, PyDict>,
+    cookies: &Bound<'_, PyDict>,
+) -> Result<ParamExtraction, ValidationErrorEntry> {
+    let name: String = match spec.get_item("name") {
+        Ok(Some(v)) => v.extract().unwrap_or_default(),
+        _ => return Ok(ParamExtraction::UseDefault),
+    };
+    let source: String = spec.get_item("source")
+        .ok().flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or_else(|| "query".into());
+    let type_kind: String = spec.get_item("type")
+        .ok().flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or_else(|| "str".into());
+    let alias: Option<String> = spec.get_item("alias")
+        .ok().flatten()
+        .and_then(|v| v.extract().ok());
+    let required: bool = spec.get_item("required")
+        .ok().flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(true);
+    let convert_underscores: bool = spec.get_item("convert_underscores")
+        .ok().flatten()
+        .and_then(|v| v.extract().ok())
+        .unwrap_or(true);
+    let validators: Option<PyObject> = spec.get_item("validators")
+        .ok().flatten()
+        .map(|v| v.unbind().into());
+
+    // Skip Phase D/C-only sources (depends, body) — Phase B-3 doesn't extract them.
+    if source == "depends" || source == "body" || source == "form" || source == "file" || source == "security" {
+        return Ok(ParamExtraction::UseDefault);
+    }
+
+    // The lookup key: alias if specified, else name. For headers, we may
+    // need to convert underscores → dashes.
+    let lookup_key: String = if let Some(a) = alias.as_deref() {
+        a.to_string()
+    } else if source == "header" && convert_underscores {
+        name.replace('_', "-")
+    } else {
+        name.clone()
+    };
+
+    // Pull the raw value(s) from the appropriate source.
+    let raw_values: Option<Vec<String>> = match source.as_str() {
+        "path" => path_params
+            .iter()
+            .find(|(n, _)| n == &name)
+            .map(|(_, v)| vec![v.clone()]),
+        "query" => match query.get_item(&lookup_key).ok().flatten() {
+            Some(v) => v.extract::<Vec<String>>().ok(),
+            None => None,
+        },
+        "header" => match headers.get_item(lookup_key.to_ascii_lowercase()).ok().flatten() {
+            // header_lookup is dict[str, list[str]] — same shape as query.
+            Some(v) => v.extract::<Vec<String>>().ok(),
+            None => None,
+        },
+        "cookie" => match cookies.get_item(&lookup_key).ok().flatten() {
+            Some(v) => Some(vec![v.extract().unwrap_or_default()]),
+            None => None,
+        },
+        _ => None,
+    };
+
+    // Missing handling.
+    let raw_values = match raw_values {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            if required {
+                return Err(ValidationErrorEntry::missing(&source, &lookup_key));
+            }
+            return Ok(ParamExtraction::UseDefault);
+        }
+    };
+
+    // List type → return a Python list, casting each item.
+    if type_kind.starts_with("list[") {
+        let inner = type_kind.strip_prefix("list[").and_then(|s| s.strip_suffix(']')).unwrap_or("str");
+        let pylist = pyo3::types::PyList::empty_bound(py);
+        for v in &raw_values {
+            let cast = cast_scalar(py, v, inner, &source, &name)?;
+            pylist.append(cast).ok();
+        }
+        return Ok(ParamExtraction::Value {
+            name,
+            value: pylist.unbind().into(),
+        });
+    }
+
+    // Single-value: take the first.
+    let value = cast_scalar(py, &raw_values[0], &type_kind, &source, &name)?;
+
+    // Validators on scalars.
+    if let Some(validators_obj) = &validators {
+        if let Ok(d) = validators_obj.bind(py).downcast::<PyDict>() {
+            run_validators(py, &value, d, &source, &name, &raw_values[0])?;
+        }
+    }
+
+    Ok(ParamExtraction::Value { name, value })
+}
+
+/// Cast a raw string into the typed Python value. Returns ValidationError on
+/// parse failure with the right loc.
+fn cast_scalar(
+    py: Python<'_>,
+    value: &str,
+    type_kind: &str,
+    source: &str,
+    name: &str,
+) -> Result<PyObject, ValidationErrorEntry> {
+    let source_static: &'static str = match source {
+        "path" => "path",
+        "query" => "query",
+        "header" => "header",
+        "cookie" => "cookie",
+        _ => "query",
+    };
+    match type_kind {
+        "int" => match value.parse::<i64>() {
+            Ok(n) => Ok(n.into_py(py)),
+            Err(_) => Err(ValidationErrorEntry {
+                err_type: "int_parsing",
+                loc: (source_static, name.to_string()),
+                msg: "Input should be a valid integer, unable to parse string as an integer",
+                input: value.to_string(),
+            }),
+        },
+        "float" => match value.parse::<f64>() {
+            Ok(n) => Ok(n.into_py(py)),
+            Err(_) => Err(ValidationErrorEntry {
+                err_type: "float_parsing",
+                loc: (source_static, name.to_string()),
+                msg: "Input should be a valid number, unable to parse string as a number",
+                input: value.to_string(),
+            }),
+        },
+        "bool" => {
+            let lc = value.to_ascii_lowercase();
+            match lc.as_str() {
+                "true" | "1" | "yes" | "on" => Ok(true.into_py(py)),
+                "false" | "0" | "no" | "off" => Ok(false.into_py(py)),
+                _ => Err(ValidationErrorEntry {
+                    err_type: "bool_parsing",
+                    loc: (source_static, name.to_string()),
+                    msg: "Input should be a valid boolean, unable to interpret input",
+                    input: value.to_string(),
+                }),
+            }
+        }
+        "uuid" => {
+            let uuid_mod = py.import_bound("uuid").map_err(|_| ValidationErrorEntry::generic(
+                source_static, name, value, "uuid_parsing", "UUID module unavailable"))?;
+            let uuid_class = uuid_mod.getattr("UUID").map_err(|_| ValidationErrorEntry::generic(
+                source_static, name, value, "uuid_parsing", "UUID class unavailable"))?;
+            match uuid_class.call1((value,)) {
+                Ok(u) => Ok(u.unbind().into()),
+                Err(_) => Err(ValidationErrorEntry {
+                    err_type: "uuid_parsing",
+                    loc: (source_static, name.to_string()),
+                    msg: "Input should be a valid UUID, unable to parse string as a UUID",
+                    input: value.to_string(),
+                }),
+            }
+        }
+        // "str" / "any" / unknown → pass through.
+        _ => Ok(value.into_py(py)),
+    }
+}
+
+/// Apply Pydantic-v2-shaped validators (gt/ge/lt/le/min_length/max_length/pattern).
+fn run_validators(
+    py: Python<'_>,
+    value: &PyObject,
+    validators: &Bound<'_, PyDict>,
+    source: &str,
+    name: &str,
+    raw: &str,
+) -> Result<(), ValidationErrorEntry> {
+    let source_static: &'static str = match source {
+        "path" => "path",
+        "query" => "query",
+        "header" => "header",
+        "cookie" => "cookie",
+        _ => "query",
+    };
+
+    // Numeric comparisons — convert value to f64.
+    let numeric_value: Option<f64> = value.bind(py).extract::<f64>().ok();
+
+    if let (Ok(Some(gt)), Some(n)) = (validators.get_item("gt").map(|x| x.and_then(|v| v.extract::<f64>().ok())), numeric_value) {
+        if !(n > gt) {
+            return Err(ValidationErrorEntry {
+                err_type: "greater_than",
+                loc: (source_static, name.to_string()),
+                msg: "Input should be greater than the configured threshold",
+                input: raw.to_string(),
+            });
+        }
+    }
+    if let (Ok(Some(ge)), Some(n)) = (validators.get_item("ge").map(|x| x.and_then(|v| v.extract::<f64>().ok())), numeric_value) {
+        if !(n >= ge) {
+            return Err(ValidationErrorEntry {
+                err_type: "greater_than_equal",
+                loc: (source_static, name.to_string()),
+                msg: "Input should be greater than or equal to the configured threshold",
+                input: raw.to_string(),
+            });
+        }
+    }
+    if let (Ok(Some(lt)), Some(n)) = (validators.get_item("lt").map(|x| x.and_then(|v| v.extract::<f64>().ok())), numeric_value) {
+        if !(n < lt) {
+            return Err(ValidationErrorEntry {
+                err_type: "less_than",
+                loc: (source_static, name.to_string()),
+                msg: "Input should be less than the configured threshold",
+                input: raw.to_string(),
+            });
+        }
+    }
+    if let (Ok(Some(le)), Some(n)) = (validators.get_item("le").map(|x| x.and_then(|v| v.extract::<f64>().ok())), numeric_value) {
+        if !(n <= le) {
+            return Err(ValidationErrorEntry {
+                err_type: "less_than_equal",
+                loc: (source_static, name.to_string()),
+                msg: "Input should be less than or equal to the configured threshold",
+                input: raw.to_string(),
+            });
+        }
+    }
+
+    // String length / pattern.
+    let str_value: Option<String> = value.bind(py).extract::<String>().ok();
+    if let (Ok(Some(min_len)), Some(s)) = (validators.get_item("min_length").map(|x| x.and_then(|v| v.extract::<usize>().ok())), &str_value) {
+        if s.chars().count() < min_len {
+            return Err(ValidationErrorEntry {
+                err_type: "string_too_short",
+                loc: (source_static, name.to_string()),
+                msg: "Input should have at least the configured minimum length",
+                input: raw.to_string(),
+            });
+        }
+    }
+    if let (Ok(Some(max_len)), Some(s)) = (validators.get_item("max_length").map(|x| x.and_then(|v| v.extract::<usize>().ok())), &str_value) {
+        if s.chars().count() > max_len {
+            return Err(ValidationErrorEntry {
+                err_type: "string_too_long",
+                loc: (source_static, name.to_string()),
+                msg: "Input should have at most the configured maximum length",
+                input: raw.to_string(),
+            });
+        }
+    }
+    if let (Ok(Some(pattern)), Some(s)) = (validators.get_item("pattern").map(|x| x.and_then(|v| v.extract::<String>().ok())), &str_value) {
+        // Use Python's `re.fullmatch` so behavior matches FastAPI/Pydantic exactly.
+        let re_mod = py.import_bound("re").ok();
+        if let Some(re_mod) = re_mod {
+            if let Ok(fm) = re_mod.getattr("fullmatch") {
+                if let Ok(result) = fm.call1((pattern.clone(), s.clone())) {
+                    if result.is_none() {
+                        return Err(ValidationErrorEntry {
+                            err_type: "string_pattern_mismatch",
+                            loc: (source_static, name.to_string()),
+                            msg: "String should match the configured pattern",
+                            input: raw.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+impl ValidationErrorEntry {
+    fn missing(source: &str, name: &str) -> Self {
+        let source_static: &'static str = match source {
+            "path" => "path",
+            "query" => "query",
+            "header" => "header",
+            "cookie" => "cookie",
+            "body" => "body",
+            _ => "query",
+        };
+        Self {
+            err_type: "missing",
+            loc: (source_static, name.to_string()),
+            msg: "Field required",
+            input: String::new(),
+        }
+    }
 }

@@ -47,8 +47,23 @@ class FastAPI(_RustFastAPI):
             method: str = scope["method"]
             path: str = scope["path"]
 
-            # Drain the request body. Phase B-1 doesn't read it but ASGI
-            # requires us to consume it before responding.
+            # Decode query_string (bytes) → str. ASGI guarantees URL-safe ASCII
+            # encoding, so latin-1 round-trips bytes safely.
+            query_bytes = scope.get("query_string") or b""
+            query_string = (
+                query_bytes.decode("latin-1")
+                if isinstance(query_bytes, (bytes, bytearray))
+                else str(query_bytes)
+            )
+
+            # Headers: ASGI delivers a list of (bytes, bytes) tuples. Decode to
+            # (str, str) so the Rust extract path doesn't have to repeat this.
+            raw_headers: Iterable[tuple[bytes, bytes]] = scope.get("headers") or []
+            headers_list: list[tuple[str, str]] = [
+                (k.decode("latin-1"), v.decode("latin-1")) for k, v in raw_headers
+            ]
+
+            # Drain the request body.
             body = bytearray()
             while True:
                 msg = await receive()
@@ -61,7 +76,7 @@ class FastAPI(_RustFastAPI):
 
             try:
                 status, headers, response_body = self._dispatch(
-                    method, path, bytes(body)
+                    method, path, query_string, headers_list, bytes(body)
                 )
             except Exception as exc:  # noqa: BLE001
                 # Phase F adds proper exception_handlers; Phase B-1 falls
