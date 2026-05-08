@@ -81,6 +81,23 @@ You keep all of FastAPI's ergonomics. You get most of [actix-web](https://actix.
 
 `/async` is the one scenario where vanilla FastAPI keeps up — its async dispatch is loop-native, while hyperfastapi currently submits coroutines to a worker thread for sync-from-Rust execution. This is on the optimization roadmap.
 
+### WebSocket throughput
+
+WebSocket echo round-trip throughput (Rust client, 64-byte payload):
+
+![WebSocket performance](docs/img/ws_perf.png)
+
+| Connections | hyperfastapi (run_native) | FastAPI + uvicorn | Speedup | Max latency (hyper / uvicorn) |
+| ----------: | ------------------------: | ----------------: | ------: | -----------------------------: |
+|           1 |                **20,588** |            15,233 |  1.35 × | 0.19 ms / 0.32 ms              |
+|           4 |                **29,451** |            19,913 |  1.48 × | 0.41 ms / 0.54 ms              |
+|           8 |                **34,377** |            16,108 |  2.13 × | 0.82 ms / 3.06 ms              |
+|          16 |                **44,734** |            13,964 |  3.20 × | 0.90 ms / 6.54 ms              |
+|          32 |                **40,875** |            22,281 |  1.83 × | 2.48 ms / 4.55 ms              |
+|          64 |                **41,805** |            18,218 |  2.30 × | 5.10 ms / **32.69 ms**         |
+
+uvicorn's WebSocket throughput peaks at ~20k msg/s and **degrades under high concurrency** (drops to 14k at 16 connections, 18k at 64). hyperfastapi continues to scale, holding above 40k msg/s past 16 connections, with **max latency 6× lower** under load.
+
 > **Reproduce these numbers**: see [Benchmarking](#benchmarking) below. Each run prints raw RPS so you can verify on your own hardware.
 
 ---
@@ -352,14 +369,19 @@ See [`docs/architecture.md`](docs/architecture.md) (TBD) for the full breakdown.
 The full benchmark suite lives in `tests/perf/` and uses [bombardier](https://github.com/codesenberg/bombardier).
 
 ```bash
-# Cross-backend comparison (vanilla fastapi+uvicorn vs hyperfastapi+hyper)
+# Cross-backend HTTP comparison (vanilla fastapi+uvicorn vs hyperfastapi+hyper)
 HYPERFASTAPI_AS_FASTAPI=1 python tests/perf/compare_backends.py --duration 5
 
 # Multi-process aggregate (4 separate Python procs)
 HYPERFASTAPI_AS_FASTAPI=1 python tests/perf/bench_hyper_multiproc.py --workers 4 --duration 5
 
-# Render charts from results
+# WebSocket throughput (Rust client) — bypasses Python asyncio.gather pathology
+cargo build --release -p ws-bench
+./target/release/ws-bench --url ws://127.0.0.1:8765/echo --connections 16 --messages 1000
+
+# Render charts
 python docs/perf/render_charts.py
+python docs/perf/render_ws_chart.py
 ```
 
 Results land in `docs/perf/results.json` + `docs/perf/multiproc.json`; charts in `docs/img/`.

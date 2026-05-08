@@ -1,0 +1,18 @@
+{
+  "description": "WebSocket echo round-trip benchmark — Rust client (tokio-tungstenite) bypasses the Python asyncio.gather scheduling pathology to measure server-side multi-connection performance correctly.",
+  "system": {
+    "platform": "Windows 11 / Intel i7",
+    "load_gen": "ws-bench (Rust)",
+    "client_workers": 16,
+    "server_workers": 4,
+    "payload_size_bytes": 64
+  },
+  "scenarios": [
+    {"connections": 1,  "msgs_per_conn": 5000, "hyperfastapi_msg_s": 20588, "uvicorn_msg_s": 15233, "hyperfastapi_max_latency_ms": 0.190, "uvicorn_max_latency_ms": 0.318},
+    {"connections": 4,  "msgs_per_conn": 2000, "hyperfastapi_msg_s": 29451, "uvicorn_msg_s": 19913, "hyperfastapi_max_latency_ms": 0.406, "uvicorn_max_latency_ms": 0.540},
+    {"connections": 8,  "msgs_per_conn": 2000, "hyperfastapi_msg_s": 34377, "uvicorn_msg_s": 16108, "hyperfastapi_max_latency_ms": 0.823, "uvicorn_max_latency_ms": 3.056},
+    {"connections": 16, "msgs_per_conn": 1000, "hyperfastapi_msg_s": 44734, "uvicorn_msg_s": 13964, "hyperfastapi_max_latency_ms": 0.904, "uvicorn_max_latency_ms": 6.543},
+    {"connections": 32, "msgs_per_conn":  500, "hyperfastapi_msg_s": 40875, "uvicorn_msg_s": 22281, "hyperfastapi_max_latency_ms": 2.484, "uvicorn_max_latency_ms": 4.546},
+    {"connections": 64, "msgs_per_conn":  500, "hyperfastapi_msg_s": 41805, "uvicorn_msg_s": 18218, "hyperfastapi_max_latency_ms": 5.097, "uvicorn_max_latency_ms": 32.691}
+  ]
+}

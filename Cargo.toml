@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/fr-json",
     "crates/fr-pyiface",
+    "crates/ws-bench",
 ]
 
 [workspace.package]

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* **Native WebSocket support** in `run_native()` (`crates/fr-pyiface/src/ws.rs`)
+  RFC-6455 handshake, tokio-tungstenite framing, Starlette-shaped Python
+  facade (`hyperfastapi._ws.NativeWebSocket`). Existing
+  `@app.websocket("/path") async def handler(ws):` works without uvicorn.
+* **Rust WS bench client** (`crates/ws-bench/`) — tokio-tungstenite client
+  that bypasses the Python `asyncio.gather` scheduling pathology. Reveals
+  the true server-side scaling: hyperfastapi holds 40k+ msg/s through 64
+  concurrent connections, while uvicorn peaks at 20k and degrades.
+
+### Performance
+
+WebSocket echo round-trip (Rust client, 64-byte payload, Windows):
+
+| Connections | hyperfastapi | uvicorn | Speedup | hyper max-lat | uvicorn max-lat |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 20,588 | 15,233 | 1.35× | 0.19ms | 0.32ms |
+| 16 | 44,734 | 13,964 | **3.20×** | 0.90ms | 6.54ms |
+| 64 | 41,805 | 18,218 | 2.30× | 5.10ms | **32.69ms** |
+
 * **HTTP/2 (cleartext + ALPN over TLS)** — `run_native()` now switches on
   `hyper_util::server::conn::auto::Builder` so HTTP/1.1 and HTTP/2 are
   served from the same TCP listener. Cleartext h2 (h2c) is auto-detected
