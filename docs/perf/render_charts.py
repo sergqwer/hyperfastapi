@@ -86,7 +86,12 @@ def chart_single(results: dict) -> None:
     ax.invert_yaxis()
     ax.set_xlabel("Requests per second (higher is better)")
     ax.set_title("Single-process throughput", loc="left")
-    ax.legend(loc="lower right", frameon=False)
+    # Headroom for the value labels at the bar tips so the longest bars
+    # don't get their numbers clipped at the right edge.
+    ax.set_xlim(0, max(fastapi + hyper) * 1.13)
+    # Legend below the plot so it never overlaps the long bars.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12),
+              ncol=2, frameon=False)
     fig.text(0.99, 0.01,
              "Windows / single Python process / bombardier c=100 / 5s per scenario",
              ha="right", fontsize=8, color="#666")
@@ -125,7 +130,11 @@ def chart_multi(results: dict, multiproc: dict) -> None:
     ax.invert_yaxis()
     ax.set_xlabel("Requests per second (higher is better)")
     ax.set_title(f"Multi-process throughput (workers = {multiproc['workers']})", loc="left")
-    ax.legend(loc="lower right", frameon=False)
+    ax.set_xlim(0, max_v * 1.13)
+    # Three-item legend below the plot so neither the bars nor the goal
+    # line get covered.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12),
+              ncol=3, frameon=False)
     fig.text(0.99, 0.01,
              "Windows / N independent Python processes / bombardier per process aggregated",
              ha="right", fontsize=8, color="#666")
@@ -169,7 +178,9 @@ def chart_speedup(results: dict, multiproc: dict) -> None:
     ax.invert_yaxis()
     ax.set_xlabel("Speedup over FastAPI + uvicorn (higher is better)")
     ax.set_title("Throughput speedup vs FastAPI + uvicorn", loc="left")
-    ax.legend(loc="lower right", frameon=False)
+    ax.set_xlim(0, max_v * 1.13)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12),
+              ncol=2, frameon=False)
     fig.tight_layout()
     out = OUT_DIR / "perf_speedup.png"
     fig.savefig(out, dpi=140, bbox_inches="tight")

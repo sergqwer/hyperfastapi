@@ -425,6 +425,13 @@ cargo clippy --workspace --all-targets -- -A warnings
 HYPERFASTAPI_AS_FASTAPI=1 PYTHONPATH=tests python -m pytest tests/conformance -q
 ```
 
+Or install the optional pre-commit hook so `cargo fmt` runs automatically on every commit:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
 CI runs the full matrix on every PR (Linux/macOS/Windows × Python 3.10–3.13).
 
 ---

@@ -56,7 +56,10 @@ def main() -> None:
     ax1.set_xlabel("concurrent WebSocket connections")
     ax1.set_ylabel("throughput (echo round-trips / sec)")
     ax1.set_title("WebSocket echo throughput", loc="left")
-    ax1.legend(loc="upper left", frameon=False)
+    # Headroom for the value labels above the tallest bar.
+    ax1.set_ylim(0, max(hyper) * 1.15)
+    ax1.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13),
+               ncol=2, frameon=False)
 
     # --- Max latency by connection count ---
     hyper_lat = [r["hyperfastapi_max_latency_ms"] for r in rows]
@@ -75,7 +78,9 @@ def main() -> None:
     ax2.set_xlabel("concurrent WebSocket connections (log scale)")
     ax2.set_ylabel("max latency (ms)")
     ax2.set_title("WebSocket max round-trip latency", loc="left")
-    ax2.legend(loc="upper left", frameon=False)
+    ax2.set_ylim(0, max(uvi_lat) * 1.15)
+    ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13),
+               ncol=2, frameon=False)
 
     fig.text(0.99, 0.01, "Windows / 64-byte payload / Rust ws-bench client (tokio-tungstenite)",
              ha="right", fontsize=8, color="#666")

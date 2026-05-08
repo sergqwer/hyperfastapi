@@ -1,0 +1,31 @@
+# Local pre-commit hooks to catch the same issues CI gates on.
+#
+# Install:
+#     pip install pre-commit
+#     pre-commit install
+#
+# Then `git commit` will run rustfmt + a quick Python lint before each commit.
+# Skip with `git commit --no-verify` if you really need to (don't push that).
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --all -- --check
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+        description: |
+          Same gate CI runs. Failing locally is faster than failing on
+          GitHub. Run `cargo fmt --all` to auto-fix.
+
+      - id: ruff-check
+        name: ruff check (Python)
+        entry: ruff check
+        language: system
+        types: [python]
+        pass_filenames: true
+        require_serial: false
+        # Don't fail commits if ruff isn't installed; skip silently.
+        verbose: false
