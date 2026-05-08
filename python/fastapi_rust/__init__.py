@@ -27,9 +27,12 @@ from .exceptions import (
     WebSocketException as WebSocketException,
 )
 
-# ---- FastAPI core: from the Rust extension --------------------------------
+# ---- FastAPI core: Rust extension + Python ASGI bridge --------------------
+# The Python `FastAPI` subclass adds the `async __call__(scope, receive, send)`
+# method so Starlette's TestClient and uvicorn can drive it. The Rust dispatch
+# logic is inherited from `_core.FastAPI`.
+from .applications import FastAPI as FastAPI
 from ._core import (
-    FastAPI as FastAPI,
     APIRouter as APIRouter,
     Body as Body,
     Cookie as Cookie,

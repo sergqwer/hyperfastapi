@@ -24,6 +24,8 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<app::FastAPI>()?;
     m.add_class::<app::APIRouter>()?;
     m.add_class::<app::RouteDecorator>()?;
+    m.add_class::<app::ApiRouteDecorator>()?;
+    m.add_class::<app::IdentityDecorator>()?;
 
     // ---- Param marker classes --------------------------------------------
     // Each is callable (it's a class), so `from fastapi_rust import Query;
