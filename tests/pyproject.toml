@@ -1,5 +1,5 @@
 [project]
-name = "fastapi-rust-tests"
+name = "hyperfastapi-tests"
 version = "0.1.0"
 description = "Conformance and performance test suite for FastAPI baseline and future Rust port"
 requires-python = ">=3.10"

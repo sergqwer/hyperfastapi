@@ -1,4 +1,4 @@
-"""fastapi_rust — Rust port of FastAPI (sibling package).
+"""hyperfastapi — Rust port of FastAPI (sibling package).
 
 Phase A: only the import contract is in place. FastAPI() and APIRouter() store
 route metadata via the Rust core but no actual dispatch happens yet — that's

@@ -76,11 +76,11 @@ jobs:
         # `find` works cross-platform via Python rather than bash glob, since
         # Windows runners don't ship find/glob in the same shell.
         run: |
-          python -c "import glob, subprocess, sys; w = glob.glob('target/wheels/fastapi_rust-*.whl')[0]; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', w])"
+          python -c "import glob, subprocess, sys; w = glob.glob('target/wheels/hyperfastapi-*.whl')[0]; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', w])"
 
       - name: Conformance tests
         env:
-          FASTAPI_RUST_AS_FASTAPI: "1"
+          HYPERFASTAPI_AS_FASTAPI: "1"
           PYTHONPATH: tests
         run: |
           python -m pytest tests/conformance -q --tb=short
@@ -90,7 +90,7 @@ jobs:
       - name: Perf smoke (get_plain, 5s)
         if: matrix.os != 'macos-latest'  # macOS runners lack pinning + bombardier in PATH
         env:
-          FASTAPI_RUST_AS_FASTAPI: "1"
+          HYPERFASTAPI_AS_FASTAPI: "1"
         run: |
           python -m pip install bombardier-py || true
           python tests/perf/runner.py --scenario get_plain --mode single --duration 5 || echo "Perf smoke is informational; failures don't block."
@@ -116,10 +116,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip maturin pytest httpx pydantic "starlette>=0.40,<0.47" python-multipart anyio psutil uvicorn
           python -m maturin build --release --interpreter python
-          python -c "import glob, subprocess, sys; w = glob.glob('target/wheels/fastapi_rust-*.whl')[0]; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', w])"
+          python -c "import glob, subprocess, sys; w = glob.glob('target/wheels/hyperfastapi-*.whl')[0]; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', w])"
       - name: Run full perf suite
         env:
-          FASTAPI_RUST_AS_FASTAPI: "1"
+          HYPERFASTAPI_AS_FASTAPI: "1"
           PYTHONPATH: tests
         run: python -m pytest tests/perf -q --tb=short
       - name: Upload perf results

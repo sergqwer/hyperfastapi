@@ -18,34 +18,34 @@ from typing import Annotated
 # uvicorn loads this module in a fresh subprocess — the parent's sys.modules
 # alias from tests/conftest.py doesn't survive the spawn. Re-apply it here so
 # perf bench actually exercises the Rust port when the env var is set.
-if os.environ.get("FASTAPI_RUST_AS_FASTAPI") == "1":
-    import fastapi_rust  # noqa: F401
-    import fastapi_rust.exceptions
-    import fastapi_rust.params
-    import fastapi_rust.responses
-    import fastapi_rust.security
-    import fastapi_rust.encoders
-    import fastapi_rust.testclient
-    import fastapi_rust.staticfiles
-    import fastapi_rust.templating
-    import fastapi_rust.middleware
-    import fastapi_rust.middleware.cors
-    import fastapi_rust.middleware.gzip
-    import fastapi_rust.middleware.trustedhost
+if os.environ.get("HYPERFASTAPI_AS_FASTAPI") == "1":
+    import hyperfastapi  # noqa: F401
+    import hyperfastapi.exceptions
+    import hyperfastapi.params
+    import hyperfastapi.responses
+    import hyperfastapi.security
+    import hyperfastapi.encoders
+    import hyperfastapi.testclient
+    import hyperfastapi.staticfiles
+    import hyperfastapi.templating
+    import hyperfastapi.middleware
+    import hyperfastapi.middleware.cors
+    import hyperfastapi.middleware.gzip
+    import hyperfastapi.middleware.trustedhost
 
-    sys.modules["fastapi"] = fastapi_rust
-    sys.modules["fastapi.exceptions"] = fastapi_rust.exceptions
-    sys.modules["fastapi.params"] = fastapi_rust.params
-    sys.modules["fastapi.responses"] = fastapi_rust.responses
-    sys.modules["fastapi.security"] = fastapi_rust.security
-    sys.modules["fastapi.encoders"] = fastapi_rust.encoders
-    sys.modules["fastapi.testclient"] = fastapi_rust.testclient
-    sys.modules["fastapi.staticfiles"] = fastapi_rust.staticfiles
-    sys.modules["fastapi.templating"] = fastapi_rust.templating
-    sys.modules["fastapi.middleware"] = fastapi_rust.middleware
-    sys.modules["fastapi.middleware.cors"] = fastapi_rust.middleware.cors
-    sys.modules["fastapi.middleware.gzip"] = fastapi_rust.middleware.gzip
-    sys.modules["fastapi.middleware.trustedhost"] = fastapi_rust.middleware.trustedhost
+    sys.modules["fastapi"] = hyperfastapi
+    sys.modules["fastapi.exceptions"] = hyperfastapi.exceptions
+    sys.modules["fastapi.params"] = hyperfastapi.params
+    sys.modules["fastapi.responses"] = hyperfastapi.responses
+    sys.modules["fastapi.security"] = hyperfastapi.security
+    sys.modules["fastapi.encoders"] = hyperfastapi.encoders
+    sys.modules["fastapi.testclient"] = hyperfastapi.testclient
+    sys.modules["fastapi.staticfiles"] = hyperfastapi.staticfiles
+    sys.modules["fastapi.templating"] = hyperfastapi.templating
+    sys.modules["fastapi.middleware"] = hyperfastapi.middleware
+    sys.modules["fastapi.middleware.cors"] = hyperfastapi.middleware.cors
+    sys.modules["fastapi.middleware.gzip"] = hyperfastapi.middleware.gzip
+    sys.modules["fastapi.middleware.trustedhost"] = hyperfastapi.middleware.trustedhost
 
 from fastapi import Depends, FastAPI, Header, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,7 +53,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 app = FastAPI(
-    title="fastapi-rust-tests perf bench",
+    title="hyperfastapi-tests perf bench",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,

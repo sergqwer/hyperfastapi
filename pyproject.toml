@@ -3,13 +3,13 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "fastapi-rust"
+name = "hyperfastapi"
 version = "0.1.0"
-description = "Rust port of FastAPI with PyO3 — sibling package, same Python API"
+description = "FastAPI-compatible web framework with a Rust core (PyO3 + hyper) — 5× single-process and 20×+ multi-process throughput vs FastAPI on uvicorn"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "fastapi-rust contributors" }]
-keywords = ["fastapi", "rust", "pyo3", "asgi", "performance"]
+authors = [{ name = "hyperfastapi contributors" }]
+keywords = ["fastapi", "rust", "pyo3", "asgi", "hyper", "performance", "web", "api"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
@@ -28,7 +28,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     # Starlette gives us `status` constants and a few re-exports we don't reimplement.
     # Pinned <0.47 to stay compatible with vanilla fastapi 0.115.x in our test deps,
-    # so the same Python install runs both vanilla fastapi and fastapi_rust.
+    # so the same Python install runs both vanilla fastapi and hyperfastapi.
     "starlette>=0.40,<0.47",
     # AnyIO is needed for TestClient internals (HTTP request orchestration).
     "anyio>=4.0",
@@ -39,7 +39,7 @@ templating = ["jinja2>=3.1.0"]
 
 [tool.maturin]
 manifest-path = "crates/fr-pyiface/Cargo.toml"
-module-name = "fastapi_rust._core"
+module-name = "hyperfastapi._core"
 python-source = "python"
 # extension-module feature is set in fr-pyiface/Cargo.toml; abi3 there too.
 features = ["pyo3/extension-module"]

@@ -19,7 +19,7 @@ use pyo3::types::PyDict;
 /// remaining constraint kwargs. The route compiler consumes these later.
 macro_rules! make_param {
     ($name:literal, $rust_name:ident) => {
-        #[pyclass(name = $name, module = "fastapi_rust._core")]
+        #[pyclass(name = $name, module = "hyperfastapi._core")]
         pub struct $rust_name {
             default: Mutex<Option<PyObject>>,
             kwargs: PyObject,
@@ -63,7 +63,7 @@ make_param!("File", File);
 
 /// `Depends(dependency, use_cache=True)` — captures the callable for the route
 /// compiler to wire into the DI graph (Phase D).
-#[pyclass(name = "Depends", module = "fastapi_rust._core")]
+#[pyclass(name = "Depends", module = "hyperfastapi._core")]
 pub struct Depends {
     dependency: Mutex<Option<PyObject>>,
     use_cache: Mutex<bool>,
@@ -101,7 +101,7 @@ impl Depends {
 
 /// `Security(dependency, scopes=None, use_cache=True)` — extends Depends with
 /// OAuth2 scopes. Phase E uses scopes for the OpenAPI security entries.
-#[pyclass(name = "Security", module = "fastapi_rust._core")]
+#[pyclass(name = "Security", module = "hyperfastapi._core")]
 pub struct Security {
     dependency: Mutex<Option<PyObject>>,
     scopes: Mutex<Vec<String>>,

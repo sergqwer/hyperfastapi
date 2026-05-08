@@ -1,4 +1,4 @@
-//! PyO3 module entry — exposes the Rust core to Python as `fastapi_rust._core`.
+//! PyO3 module entry — exposes the Rust core to Python as `hyperfastapi._core`.
 //!
 //! Phase A scope: FastAPI/APIRouter PyClasses that store route metadata, and
 //! the FastAPI-specific param markers (Body/Query/Path/Header/Cookie/Form/File/
@@ -30,7 +30,7 @@ fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<app::IdentityDecorator>()?;
 
     // ---- Param marker classes --------------------------------------------
-    // Each is callable (it's a class), so `from fastapi_rust import Query;
+    // Each is callable (it's a class), so `from hyperfastapi import Query;
     // Query(default=None)` returns an instance — matching FastAPI's behavior
     // where `fastapi.Query` is a function that returns `fastapi.params.Query`.
     m.add_class::<params::Body>()?;

@@ -72,7 +72,7 @@ def _ensure_worker_loop():
             finally:
                 loop.close()
 
-        t = threading.Thread(target=runner, name="fastapi_rust-async-worker", daemon=True)
+        t = threading.Thread(target=runner, name="hyperfastapi-async-worker", daemon=True)
         t.start()
         ready.wait()
         _WORKER_LOOP = loop
@@ -753,7 +753,7 @@ def _is_pydantic_model(t: Any) -> bool:
 
 def _is_security_scopes_type(t: Any) -> bool:
     """True if `t` is the SecurityScopes class. We name-check first to avoid
-    importing fastapi_rust.security during compile of fastapi_rust itself.
+    importing hyperfastapi.security during compile of hyperfastapi itself.
     """
     if not isinstance(t, type):
         return False
@@ -768,7 +768,7 @@ def _is_security_scopes_type(t: Any) -> bool:
 
 def _is_background_tasks_type(t: Any) -> bool:
     """True if ``t`` is starlette's BackgroundTasks (which we re-export as
-    ``fastapi_rust.BackgroundTasks``). Matched by class identity rather than
+    ``hyperfastapi.BackgroundTasks``). Matched by class identity rather than
     name to avoid false positives.
     """
     if not isinstance(t, type):
@@ -858,7 +858,7 @@ def _is_marker(obj: Any, marker_name: str) -> bool:
     Imports are deferred so this works even before _core is loaded.
     """
     try:
-        mod = __import__("fastapi_rust._core", fromlist=[marker_name])
+        mod = __import__("hyperfastapi._core", fromlist=[marker_name])
         cls = getattr(mod, marker_name, None)
         return cls is not None and isinstance(obj, cls)
     except Exception:

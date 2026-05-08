@@ -1,12 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/fr-core",
-    "crates/fr-routing",
     "crates/fr-json",
-    "crates/fr-simd",
     "crates/fr-pyiface",
-    "crates/fr-bench",
 ]
 
 [workspace.package]

@@ -1,0 +1,79 @@
+{
+  "run_id": "2026-05-08T13-36-11Z",
+  "duration_sec": 5,
+  "workers": 4,
+  "scenarios": [
+    {
+      "name": "get_plain",
+      "workers": 4,
+      "rps_total": 188673.66,
+      "rps_per_proc": [
+        47079.58,
+        47145.92,
+        46768.73,
+        47679.43
+      ],
+      "errors_5xx_total": 0
+    },
+    {
+      "name": "get_with_query",
+      "workers": 4,
+      "rps_total": 105194.93,
+      "rps_per_proc": [
+        26297.24,
+        26637.41,
+        26005.93,
+        26254.35
+      ],
+      "errors_5xx_total": 0
+    },
+    {
+      "name": "post_validated",
+      "workers": 4,
+      "rps_total": 105833.38,
+      "rps_per_proc": [
+        26319.39,
+        26512.95,
+        26358.6,
+        26642.44
+      ],
+      "errors_5xx_total": 0
+    },
+    {
+      "name": "get_with_chain_deps",
+      "workers": 4,
+      "rps_total": 77676.54999999999,
+      "rps_per_proc": [
+        19693.03,
+        19117.09,
+        19689.04,
+        19177.39
+      ],
+      "errors_5xx_total": 0
+    },
+    {
+      "name": "get_async",
+      "workers": 4,
+      "rps_total": 37799.299999999996,
+      "rps_per_proc": [
+        9408.67,
+        9474.71,
+        9443.96,
+        9471.96
+      ],
+      "errors_5xx_total": 0
+    },
+    {
+      "name": "get_with_middleware",
+      "workers": 4,
+      "rps_total": 193807.84,
+      "rps_per_proc": [
+        49178.29,
+        47725.12,
+        47446.16,
+        49458.27
+      ],
+      "errors_5xx_total": 0
+    }
+  ]
+}

@@ -65,13 +65,13 @@ pub fn run_native(
             let listener = TcpListener::bind(addr).await.map_err(|e| {
                 pyo3::exceptions::PyOSError::new_err(format!("bind {addr}: {e}"))
             })?;
-            eprintln!("[fastapi_rust] listening on http://{}", addr);
+            eprintln!("[hyperfastapi] listening on http://{}", addr);
 
             loop {
                 let (stream, _peer) = match listener.accept().await {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!("[fastapi_rust] accept error: {e}");
+                        eprintln!("[hyperfastapi] accept error: {e}");
                         continue;
                     }
                 };

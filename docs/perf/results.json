@@ -1,0 +1,69 @@
+{
+  "run_id": "2026-05-08T13-34-38Z",
+  "duration_sec": 5,
+  "system": {
+    "cpu_model": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "cores_logical": 16,
+    "cores_physical": 8,
+    "ram_gb": 63.12,
+    "os": "Windows-10-10.0.20348-SP0",
+    "python_version": "3.10.10",
+    "python_implementation": "CPython"
+  },
+  "scenarios": [
+    {
+      "name": "get_plain",
+      "fastapi_uvicorn_single": 3259.04,
+      "fastapi_uvicorn_multi": 15332.98,
+      "hyperfastapi_uvicorn_single": 12407.03,
+      "hyperfastapi_uvicorn_multi": 76422.99,
+      "hyperfastapi_hyper_single": 82548.65,
+      "hyperfastapi_hyper_multi": 65196.66
+    },
+    {
+      "name": "get_with_query",
+      "fastapi_uvicorn_single": 2819.42,
+      "fastapi_uvicorn_multi": 14792.88,
+      "hyperfastapi_uvicorn_single": 8927.19,
+      "hyperfastapi_uvicorn_multi": 57670.23,
+      "hyperfastapi_hyper_single": 34346.36,
+      "hyperfastapi_hyper_multi": 30486.14
+    },
+    {
+      "name": "post_validated",
+      "fastapi_uvicorn_single": 2898.1,
+      "fastapi_uvicorn_multi": 13715.59,
+      "hyperfastapi_uvicorn_single": 11247.88,
+      "hyperfastapi_uvicorn_multi": 69281.46,
+      "hyperfastapi_hyper_single": 37348.9,
+      "hyperfastapi_hyper_multi": 27675.82
+    },
+    {
+      "name": "get_with_chain_deps",
+      "fastapi_uvicorn_single": 2006.2,
+      "fastapi_uvicorn_multi": 8497.49,
+      "hyperfastapi_uvicorn_single": 9223.99,
+      "hyperfastapi_uvicorn_multi": 59684.88,
+      "hyperfastapi_hyper_single": 25980.42,
+      "hyperfastapi_hyper_multi": 20661.38
+    },
+    {
+      "name": "get_async",
+      "fastapi_uvicorn_single": 8919.82,
+      "fastapi_uvicorn_multi": 50818.92,
+      "hyperfastapi_uvicorn_single": 7934.64,
+      "hyperfastapi_uvicorn_multi": 43777.33,
+      "hyperfastapi_hyper_single": 18284.72,
+      "hyperfastapi_hyper_multi": 16194.3
+    },
+    {
+      "name": "get_with_middleware",
+      "fastapi_uvicorn_single": 3161.87,
+      "fastapi_uvicorn_multi": 15356.76,
+      "hyperfastapi_uvicorn_single": 12835.29,
+      "hyperfastapi_uvicorn_multi": 83978.44,
+      "hyperfastapi_hyper_single": 57334.04,
+      "hyperfastapi_hyper_multi": 74137.52
+    }
+  ]
+}

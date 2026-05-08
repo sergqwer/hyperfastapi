@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "PyO3 bindings — the cdylib loaded by Python as fastapi_rust._core"
+description = "PyO3 bindings — the cdylib loaded by Python as hyperfastapi._core"
 
 [lib]
 name = "_core"
@@ -12,10 +12,7 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-fr-core = { path = "../fr-core" }
-fr-routing = { path = "../fr-routing" }
 fr-json = { path = "../fr-json" }
-fr-simd = { path = "../fr-simd" }
 
 # extension-module: do not link libpython (we're loaded into the interpreter).
 # abi3-py310: stable ABI from Python 3.10+ — single wheel works for 3.10/3.11/3.12/3.13.

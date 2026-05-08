@@ -27,7 +27,7 @@ pub(crate) struct Route {
     /// One entry per handler param the dispatch should extract; each entry
     /// is a Python dict of `{name, source, type, default, alias, required,
     /// validators, convert_underscores}` produced by
-    /// `fastapi_rust._routing.compile_route_plan` at decorator time.
+    /// `hyperfastapi._routing.compile_route_plan` at decorator time.
     pub param_plan: Vec<PyObject>,
     /// Phase C: handler return value gets wrapped in this Response subclass
     /// (HTMLResponse / PlainTextResponse / JSONResponse / ...). None means
@@ -75,7 +75,7 @@ impl SecurityEntry {
 
 /// Callable class returned by `app.get("/")` etc. Calling it with the user's
 /// handler stores a Route record and returns the handler unchanged.
-#[pyclass(module = "fastapi_rust._core")]
+#[pyclass(module = "hyperfastapi._core")]
 pub struct RouteDecorator {
     method: String,
     path: String,
@@ -181,14 +181,14 @@ fn opex_rdesc(kw: Option<&Bound<'_, PyDict>>) -> Option<String> {
 }
 
 /// Phase E: extract per-route security info by calling
-/// `fastapi_rust._routing.extract_security_info(plan, route_deps)`. Returns
+/// `hyperfastapi._routing.extract_security_info(plan, route_deps)`. Returns
 /// list of `SecurityEntry` triples (scheme_name, scopes, model_dict).
 fn extract_route_security(
     py: Python<'_>,
     plan: &[PyObject],
     deps: &[PyObject],
 ) -> PyResult<Vec<SecurityEntry>> {
-    let routing = py.import_bound("fastapi_rust._routing")?;
+    let routing = py.import_bound("hyperfastapi._routing")?;
     let func = routing.getattr("extract_security_info")?;
     let plan_list = pyo3::types::PyList::empty_bound(py);
     for p in plan {
@@ -212,8 +212,8 @@ fn extract_route_security(
     Ok(out)
 }
 
-/// Phase N: cache `fastapi_rust._bg` Python module reference. Avoids
-/// `py.import_bound("fastapi_rust._bg")` on every request (~1µs each).
+/// Phase N: cache `hyperfastapi._bg` Python module reference. Avoids
+/// `py.import_bound("hyperfastapi._bg")` on every request (~1µs each).
 fn get_cached_bg_module(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
     use once_cell::sync::OnceCell;
     static CACHE: OnceCell<PyObject> = OnceCell::new();
@@ -221,7 +221,7 @@ fn get_cached_bg_module(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyMod
         return Ok(obj.bind(py).clone().downcast_into::<pyo3::types::PyModule>()
             .expect("cached _bg is a module"));
     }
-    let m = py.import_bound("fastapi_rust._bg")?;
+    let m = py.import_bound("hyperfastapi._bg")?;
     let _ = CACHE.set(m.clone().unbind().into_any());
     Ok(m)
 }
@@ -257,7 +257,7 @@ fn detect_handler_is_async(py: Python<'_>, handler: &PyObject) -> bool {
     false
 }
 
-/// Inspect handler's Python signature via `fastapi_rust._routing.compile_route_plan`.
+/// Inspect handler's Python signature via `hyperfastapi._routing.compile_route_plan`.
 /// Each entry is a Python dict; we keep it as PyObject and extract fields at
 /// dispatch time (Phase J can pre-parse if profiling shows it matters).
 fn compile_route_plan(
@@ -265,7 +265,7 @@ fn compile_route_plan(
     handler: &PyObject,
     path: &str,
 ) -> PyResult<Vec<PyObject>> {
-    let routing_mod = py.import_bound("fastapi_rust._routing")?;
+    let routing_mod = py.import_bound("hyperfastapi._routing")?;
     let compiler = routing_mod.getattr("compile_route_plan")?;
     let result = compiler.call1((handler.clone_ref(py), path))?;
     let list = result.downcast_into::<pyo3::types::PyList>()?;
@@ -282,7 +282,7 @@ fn clone_param_plan(py: Python<'_>, plan: &[PyObject]) -> Vec<PyObject> {
     plan.iter().map(|p| p.clone_ref(py)).collect()
 }
 
-#[pyclass(name = "FastAPI", module = "fastapi_rust._core", subclass)]
+#[pyclass(name = "FastAPI", module = "hyperfastapi._core", subclass)]
 pub struct FastAPI {
     title: Mutex<String>,
     version: Mutex<String>,
@@ -962,7 +962,7 @@ impl FastAPI {
             // — that helper does 4 inspect.* calls per request which adds
             // ~10µs to a 20µs request budget.
             let result = if route_is_async {
-                let routing_mod = py.import_bound("fastapi_rust._routing")?;
+                let routing_mod = py.import_bound("hyperfastapi._routing")?;
                 let async_caller = routing_mod.getattr("call_with_async_handling")?;
                 let empty_kwargs = PyDict::new_bound(py);
                 async_caller.call1((handler.bind(py), &empty_kwargs))?.unbind()
@@ -991,7 +991,7 @@ impl FastAPI {
                     None => false,
                 };
                 if is_streaming || is_file {
-                    let bg = py.import_bound("fastapi_rust._bg")?;
+                    let bg = py.import_bound("hyperfastapi._bg")?;
                     bg.setattr("_current_raw_response", result.clone_ref(py))?;
                     return Ok((0, vec![], Vec::new()));
                 }
@@ -1100,7 +1100,7 @@ impl FastAPI {
                 .and_then(|v| v.extract::<Vec<String>>().ok())
                 .and_then(|vs| vs.into_iter().next())
                 .unwrap_or_default();
-            let routing_mod = py.import_bound("fastapi_rust._routing")?;
+            let routing_mod = py.import_bound("hyperfastapi._routing")?;
             let parser = routing_mod.getattr("parse_form_body")?;
             let bytes_obj = pyo3::types::PyBytes::new_bound(py, &body_bytes_for_form);
             let parsed = parser.call1((bytes_obj, content_type))?;
@@ -1215,7 +1215,7 @@ impl FastAPI {
             s == "depends" || s == "security" || s == "background_tasks" || s == "request"
         });
         if needs_deps {
-            let routing_mod = py.import_bound("fastapi_rust._routing")?;
+            let routing_mod = py.import_bound("hyperfastapi._routing")?;
             let resolver = routing_mod.getattr("resolve_dependencies")?;
             let expander = routing_mod.getattr("expand_route_level_dependencies")?;
             let plan_list = pyo3::types::PyList::empty_bound(py);
@@ -1298,7 +1298,7 @@ impl FastAPI {
         // except blocks run AFTER the handler in proper LIFO order. On
         // handler failure, drain_yield_deps(exc) injects the exception via
         // gen.throw so the dep's `except` clause sees it, then re-raise.
-        let routing_mod = py.import_bound("fastapi_rust._routing")?;
+        let routing_mod = py.import_bound("hyperfastapi._routing")?;
         let async_caller = routing_mod.getattr("call_with_async_handling")?;
         let drainer = routing_mod.getattr("drain_yield_deps")?;
         let result = match async_caller.call1((handler.bind(py), &kwargs)) {
@@ -1332,7 +1332,7 @@ impl FastAPI {
                 None => false,
             };
             if is_streaming || is_file {
-                let bg = py.import_bound("fastapi_rust._bg")?;
+                let bg = py.import_bound("hyperfastapi._bg")?;
                 bg.setattr("_current_raw_response", result.clone_ref(py))?;
                 return Ok((0, vec![], Vec::new()));
             }
@@ -1442,7 +1442,7 @@ impl FastAPI {
     }
 }
 
-#[pyclass(name = "APIRouter", module = "fastapi_rust._core", subclass)]
+#[pyclass(name = "APIRouter", module = "hyperfastapi._core", subclass)]
 pub struct APIRouter {
     pub(crate) prefix: Mutex<String>,
     pub(crate) tags: Mutex<Vec<String>>,
@@ -1597,7 +1597,7 @@ impl APIRouter {
     }
 }
 
-#[pyclass(module = "fastapi_rust._core")]
+#[pyclass(module = "hyperfastapi._core")]
 pub struct IdentityDecorator;
 
 #[pymethods]
@@ -1607,7 +1607,7 @@ impl IdentityDecorator {
 
 /// Decorator returned by `app.api_route(path, methods=[...])` — registers one
 /// route per method when called with the handler.
-#[pyclass(module = "fastapi_rust._core")]
+#[pyclass(module = "hyperfastapi._core")]
 pub struct ApiRouteDecorator {
     methods: Vec<String>,
     path: String,
@@ -1780,7 +1780,7 @@ fn serialize_value_to_json(py: Python<'_>, value: &PyObject) -> PyResult<Vec<u8>
     }
     // Fallback: json.dumps(value, default=jsonable_encoder).encode("utf-8")
     let json_mod = py.import_bound("json")?;
-    let encoders_mod = py.import_bound("fastapi_rust.encoders")?;
+    let encoders_mod = py.import_bound("hyperfastapi.encoders")?;
     let encoder = encoders_mod.getattr("jsonable_encoder")?;
     let kwargs = PyDict::new_bound(py);
     kwargs.set_item("default", encoder)?;
