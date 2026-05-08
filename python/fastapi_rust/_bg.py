@@ -1,9 +1,9 @@
-"""BackgroundTasks state stash — Rust dispatch sets ``_current_tasks`` if the
-handler declared a ``BackgroundTasks`` parameter; the ASGI layer reads it after
-the response body is sent and runs the queued tasks.
+"""Per-request state stash — used by the ASGI layer to hand things into the
+Rust dispatcher's resolve_dependencies path that aren't part of the existing
+arg list (BackgroundTasks, the Starlette Request).
 
-Phase J replaces this side-channel by threading the tasks object through the
-return tuple from Rust ``_dispatch`` directly.
+Phase J replaces this side-channel by threading these objects through the
+Rust ``_dispatch`` return / args directly.
 """
 
 from __future__ import annotations
@@ -11,3 +11,4 @@ from __future__ import annotations
 from typing import Any
 
 _current_tasks: Any = None
+_current_request: Any = None

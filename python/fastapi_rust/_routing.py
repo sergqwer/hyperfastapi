@@ -337,6 +337,11 @@ def resolve_dependencies(
                 from . import _bg as _bg_state
                 _bg_state._current_tasks = bg_tasks
             out[entry["name"]] = bg_tasks
+        elif entry["source"] == "request":
+            from . import _bg as _bg_state
+            req = _bg_state._current_request
+            if req is not None:
+                out[entry["name"]] = req
     return out, None
 
 
@@ -617,6 +622,17 @@ def _is_background_tasks_type(t: Any) -> bool:
         return False
 
 
+def _is_request_type(t: Any) -> bool:
+    """True if ``t`` is starlette.requests.Request (or our re-export)."""
+    if not isinstance(t, type):
+        return False
+    try:
+        from starlette.requests import Request
+        return issubclass(t, Request)
+    except Exception:
+        return False
+
+
 def _type_kind(t: Any) -> str:
     """Map a Python type to our kind string. Returns "any" for unrecognized.
 
@@ -825,6 +841,23 @@ def compile_route_plan(handler: Any, path_template: str, _seen: set[int] | None 
             plan.append({
                 "name": name,
                 "source": "background_tasks",
+                "type": "any",
+                "default": None,
+                "alias": None,
+                "required": False,
+                "validators": {},
+                "convert_underscores": True,
+                "embed": False,
+                "media_type": "application/json",
+            })
+            continue
+
+        # Phase I: Request parameter — handed in via the ASGI layer so handlers
+        # can do `request.scope/state/url/...`.
+        if _is_request_type(type_for_kind):
+            plan.append({
+                "name": name,
+                "source": "request",
                 "type": "any",
                 "default": None,
                 "alias": None,

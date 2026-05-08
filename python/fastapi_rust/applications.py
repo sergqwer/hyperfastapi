@@ -87,6 +87,23 @@ class FastAPI(_RustFastAPI):
             if not hasattr(self, "_lifespan_user"):
                 self._lifespan_user = None
             self._middleware_stack = None
+            self._mounts: list[tuple[str, Any, str | None]] = []  # (path, app, name)
+
+    # ------------------------------------------------------------------
+    # Mount sub-ASGI app at a path prefix (StaticFiles, sub-FastAPI, etc.)
+    # ------------------------------------------------------------------
+
+    def mount(self, path: str, app: Any, name: str | None = None) -> None:
+        """Mount a sub-ASGI app at ``path``. Requests under ``path/...`` are
+        forwarded to ``app`` with the prefix stripped from ``scope['path']``.
+        """
+        self._ensure_state()
+        if not path.startswith("/"):
+            path = "/" + path
+        # Drop trailing slash for matching consistency.
+        if path.endswith("/") and len(path) > 1:
+            path = path[:-1]
+        self._mounts.append((path, app, name))
 
     # ------------------------------------------------------------------
     # Registration API
@@ -264,6 +281,20 @@ class FastAPI(_RustFastAPI):
         method: str = scope["method"]
         path: str = scope["path"]
 
+        # Phase I: forward to a mounted sub-ASGI app if the path prefix matches.
+        # Iterate in registration order; first prefix wins. Strip prefix from
+        # scope["path"] and put the rest in scope["root_path"] so apps that
+        # build their own URLs (StaticFiles) see the right values.
+        if getattr(self, "_mounts", None):
+            for prefix, sub_app, _name in self._mounts:
+                if path == prefix or path.startswith(prefix + "/"):
+                    sub_path = path[len(prefix):] or "/"
+                    sub_scope = dict(scope)
+                    sub_scope["path"] = sub_path
+                    sub_scope["root_path"] = scope.get("root_path", "") + prefix
+                    await sub_app(sub_scope, receive, send)
+                    return
+
         # Phase H: intercept /openapi.json before handing to Rust so the
         # Python-built schema (with parameters/requestBody/components) wins
         # over the Rust skeleton.
@@ -318,9 +349,11 @@ class FastAPI(_RustFastAPI):
 
         # Synchronous dispatch into Rust. HTTPException raised by handlers
         # surfaces as a PyErr; ExceptionMiddleware (one layer up) catches and
-        # routes to the registered handler.
+        # routes to the registered handler. We construct a Starlette Request
+        # eagerly so handlers declaring ``request: Request`` get a real one.
+        request_obj = Request(scope, receive=receive)
         status, headers, response_body, background = await self._dispatch_async(
-            method, path, query_string, headers_list, bytes(body)
+            method, path, query_string, headers_list, bytes(body), request_obj
         )
 
         headers_bytes: list[tuple[bytes, bytes]] = [
@@ -380,25 +413,24 @@ class FastAPI(_RustFastAPI):
         query_string: str,
         headers_list: list[tuple[str, str]],
         body: bytes,
+        request: Any = None,
     ) -> tuple[int, list[tuple[str, str]], bytes, Any]:
-        """Wrap the sync Rust dispatcher; if it raises, the surrounding
-        middleware (ExceptionMiddleware / ServerErrorMiddleware) catches and
-        renders. We return BackgroundTasks separately so the ASGI layer can
-        run them after the body is delivered.
+        """Wrap the sync Rust dispatcher. ``request`` is a Starlette Request
+        constructed by the ASGI layer; it's stashed so handler params declared
+        as ``request: Request`` can receive it.
         """
-        # The Rust _dispatch returns (status, headers, body); BackgroundTasks
-        # are smuggled via a thread-local set during dispatch, then read here.
-        # Phase J: thread the tasks object through the return tuple from Rust
-        # directly. For now we use a Python-side stash because BackgroundTasks
-        # only matters for handlers that explicitly request it.
-        from . import _bg as bg_state  # lazy import to avoid cycles
+        from . import _bg as bg_state
         bg_state._current_tasks = None
-        status, headers, response_body = self._dispatch(
-            method, path, query_string, headers_list, body
-        )
-        tasks = bg_state._current_tasks
-        bg_state._current_tasks = None
-        return status, headers, response_body, tasks
+        bg_state._current_request = request
+        try:
+            status, headers, response_body = self._dispatch(
+                method, path, query_string, headers_list, body
+            )
+            tasks = bg_state._current_tasks
+            return status, headers, response_body, tasks
+        finally:
+            bg_state._current_tasks = None
+            bg_state._current_request = None
 
 
 __all__ = ["FastAPI"]

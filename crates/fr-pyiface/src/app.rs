@@ -917,7 +917,7 @@ impl FastAPI {
             };
             let s: String = dict.get_item("source").ok().flatten()
                 .and_then(|v| v.extract().ok()).unwrap_or_default();
-            s == "depends" || s == "security" || s == "background_tasks"
+            s == "depends" || s == "security" || s == "background_tasks" || s == "request"
         });
         if needs_deps {
             let routing_mod = py.import_bound("fastapi_rust._routing")?;
@@ -2030,9 +2030,11 @@ fn extract_one_param(
         .map(|v| v.unbind().into());
 
     // Body is handled in extract_body_params; depends/security in Phase D/E;
-    // security_scopes / background_tasks are filled by resolve_dependencies.
+    // security_scopes / background_tasks / request are filled by
+    // resolve_dependencies.
     if source == "depends" || source == "body" || source == "security"
-        || source == "security_scopes" || source == "background_tasks" {
+        || source == "security_scopes" || source == "background_tasks"
+        || source == "request" {
         return Ok(ParamExtraction::UseDefault);
     }
 
