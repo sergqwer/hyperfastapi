@@ -10,7 +10,9 @@
 use pyo3::prelude::*;
 
 mod app;
+mod json_fast;
 mod params;
+mod server;
 
 #[pymodule]
 fn _core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -22,3 +22,20 @@ fr-simd = { path = "../fr-simd" }
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"] }
 parking_lot.workspace = true
 once_cell.workspace = true
+
+# Phase M: native JSON serialization in dispatch hot path (replaces Python
+# json.dumps for the common dict/list/scalar payloads). Falls back to Python
+# encoder for exotic types (Pydantic models, datetime, UUID, etc.).
+serde_json = { workspace = true }
+itoa = "1"
+ryu = "1"
+
+# Phase N: native HTTP server (replaces uvicorn for max-perf scenarios).
+# tokio multi-thread runtime + hyper 1.x. Goal: 100k+ RPS single-process by
+# avoiding the uvicorn ASGI parser/scope-build overhead and minimizing the
+# Python entry footprint to just the handler call + response build.
+tokio = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+bytes = { workspace = true }
+http-body-util = "0.1"

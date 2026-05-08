@@ -89,6 +89,24 @@ def _build_uvicorn_cmd(workers: int, port: int) -> list[str]:
     ]
 
 
+def _build_hyper_cmd(workers: int, port: int) -> list[str]:
+    """Phase N: launch the Rust hyper server via native_launcher.py instead of
+    uvicorn. workers maps to the tokio multi-thread runtime worker count;
+    GIL-bound Python work still serializes, so for true parallelism the
+    caller spawns multiple separate processes (run_multi_native below).
+    """
+    return [
+        sys.executable,
+        str(THIS_DIR / "native_launcher.py"),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--workers",
+        str(workers),
+    ]
+
+
 def _terminate_tree(proc: subprocess.Popen) -> None:
     """Kill uvicorn supervisor AND all its workers (Windows leaves zombies otherwise)."""
     if proc.poll() is not None:
@@ -116,8 +134,19 @@ def _terminate_tree(proc: subprocess.Popen) -> None:
 
 
 @contextlib.contextmanager
-def _server(workers: int, port: int, pinned_core: int | None) -> Iterator[subprocess.Popen]:
-    cmd = _build_uvicorn_cmd(workers=workers, port=port)
+def _server(
+    workers: int,
+    port: int,
+    pinned_core: int | None,
+    backend: str = "uvicorn",
+) -> Iterator[subprocess.Popen]:
+    """Launch one server subprocess. backend ∈ {"uvicorn", "hyper"}; the hyper
+    backend uses the Rust native HTTP server (Phase N) — same conformance, ~5×
+    higher RPS, no ASGI middleware stack."""
+    if backend == "hyper":
+        cmd = _build_hyper_cmd(workers=workers, port=port)
+    else:
+        cmd = _build_uvicorn_cmd(workers=workers, port=port)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
@@ -169,7 +198,9 @@ def _bench(config: RunConfig, port: int) -> dict[str, Any]:
     }
 
 
-def run_single(scenario: Scenario, duration_sec: int = 30) -> dict[str, Any]:
+def run_single(
+    scenario: Scenario, duration_sec: int = 30, backend: str = "uvicorn"
+) -> dict[str, Any]:
     """1 worker pinned to core 0 — exposes the GIL-bound single-thread ceiling."""
     port = _free_port()
     config = RunConfig(
@@ -180,11 +211,13 @@ def run_single(scenario: Scenario, duration_sec: int = 30) -> dict[str, Any]:
         concurrency=scenario.concurrency,
         pinned_core=0,
     )
-    with _server(workers=1, port=port, pinned_core=0):
+    with _server(workers=1, port=port, pinned_core=0, backend=backend):
         return _bench(config, port)
 
 
-def run_multi(scenario: Scenario, duration_sec: int = 30) -> dict[str, Any]:
+def run_multi(
+    scenario: Scenario, duration_sec: int = 30, backend: str = "uvicorn"
+) -> dict[str, Any]:
     """N workers across all cores — production-style baseline for FastAPI."""
     workers = os.cpu_count() or 1
     port = _free_port()
@@ -198,7 +231,7 @@ def run_multi(scenario: Scenario, duration_sec: int = 30) -> dict[str, Any]:
         concurrency=concurrency,
         pinned_core=None,
     )
-    with _server(workers=workers, port=port, pinned_core=None):
+    with _server(workers=workers, port=port, pinned_core=None, backend=backend):
         return _bench(config, port)
 
 

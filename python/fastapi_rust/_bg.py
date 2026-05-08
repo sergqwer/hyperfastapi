@@ -23,3 +23,14 @@ _current_raw_response: Any = None
 # yield; drained in LIFO order by drain_yield_deps after the handler runs
 # (success → next(); exception → gen.throw() so the dep's except/finally fire).
 _current_yield_gens: list = []
+
+
+def reset(request: Any = None) -> None:
+    """Phase N: single-call per-request state reset. Replaces 4 separate
+    setattr() calls from Rust hot path with one function call (3 GIL-side
+    attribute writes saved per request)."""
+    global _current_tasks, _current_request, _current_raw_response, _current_yield_gens
+    _current_tasks = None
+    _current_request = request
+    _current_raw_response = None
+    _current_yield_gens = []

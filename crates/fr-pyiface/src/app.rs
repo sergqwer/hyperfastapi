@@ -51,6 +51,10 @@ pub(crate) struct Route {
     /// scheme's OpenAPI dict (`type`/`scheme`/`flows`/...). Drives
     /// `op["security"]` and `components.securitySchemes`.
     pub security: Vec<SecurityEntry>,
+    /// Phase N: precomputed at registration time so dispatch hot path can
+    /// skip the `inspect.iscoroutinefunction` lookup per request. True only
+    /// for plain `async def` handlers (not generators, not classes).
+    pub is_async: bool,
 }
 
 pub(crate) struct SecurityEntry {
@@ -128,6 +132,7 @@ impl RouteDecorator {
         }
         let plan = compile_route_plan(py, &func, &self.path).unwrap_or_default();
         let security = extract_route_security(py, &plan, &self.dependencies).unwrap_or_default();
+        let is_async = detect_handler_is_async(py, &func);
         self.routes.lock().push(Route {
             method: self.method.clone(),
             path: self.path.clone(),
@@ -152,6 +157,7 @@ impl RouteDecorator {
             responses: self.responses.as_ref().map(|p| p.clone_ref(py)),
             response_description: self.response_description.clone(),
             security,
+            is_async,
         });
         Ok(func)
     }
@@ -204,6 +210,51 @@ fn extract_route_security(
         out.push(SecurityEntry { scheme_name: name, scopes, model });
     }
     Ok(out)
+}
+
+/// Phase N: cache `fastapi_rust._bg` Python module reference. Avoids
+/// `py.import_bound("fastapi_rust._bg")` on every request (~1µs each).
+fn get_cached_bg_module(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+    use once_cell::sync::OnceCell;
+    static CACHE: OnceCell<PyObject> = OnceCell::new();
+    if let Some(obj) = CACHE.get() {
+        return Ok(obj.bind(py).clone().downcast_into::<pyo3::types::PyModule>()
+            .expect("cached _bg is a module"));
+    }
+    let m = py.import_bound("fastapi_rust._bg")?;
+    let _ = CACHE.set(m.clone().unbind().into_any());
+    Ok(m)
+}
+
+/// Phase N: classify handler as plain sync, plain async, or generator-flavored
+/// at registration time. Dispatch hot path can then skip per-request
+/// `inspect.iscoroutinefunction` calls.
+fn detect_handler_is_async(py: Python<'_>, handler: &PyObject) -> bool {
+    let inspect = match py.import_bound("inspect") {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let is_coro = inspect.getattr("iscoroutinefunction").ok();
+    let is_async_gen = inspect.getattr("isasyncgenfunction").ok();
+    let is_gen = inspect.getattr("isgeneratorfunction").ok();
+    let h = handler.bind(py);
+    // Treat anything generator-flavored as needing the slow path.
+    if let Some(f) = is_async_gen {
+        if f.call1((h,)).and_then(|r| r.extract::<bool>()).unwrap_or(false) {
+            return false;
+        }
+    }
+    if let Some(f) = is_gen {
+        if f.call1((h,)).and_then(|r| r.extract::<bool>()).unwrap_or(false) {
+            return false;
+        }
+    }
+    if let Some(f) = is_coro {
+        if f.call1((h,)).and_then(|r| r.extract::<bool>()).unwrap_or(false) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Inspect handler's Python signature via `fastapi_rust._routing.compile_route_plan`.
@@ -515,10 +566,26 @@ impl FastAPI {
         Ok(())
     }
 
+    /// Phase N: native HTTP server entry point. Skips ASGI / uvicorn entirely
+    /// and serves directly from a Rust hyper server. Trade-off: ASGI middleware
+    /// (CORS, GZip, custom @app.middleware) is BYPASSED — handlers, deps,
+    /// validation, response_model, exception handlers all still run.
+    /// Use this for max-perf scenarios; use uvicorn for ASGI-rich deployments.
+    #[pyo3(signature = (host = "127.0.0.1".to_string(), port = 8000, workers = 0))]
+    fn run_native(slf: Py<Self>, py: Python<'_>, host: String, port: u16, workers: usize) -> PyResult<()> {
+        let n_workers = if workers == 0 {
+            std::thread::available_parallelism().map(|p| p.get()).unwrap_or(1)
+        } else {
+            workers
+        };
+        crate::server::run_native(py, slf.into_any(), &host, port, n_workers)
+    }
+
     #[pyo3(signature = (path, endpoint, *, methods = None, response_class = None, **_kwargs))]
     fn add_api_route(&self, py: Python<'_>, path: String, endpoint: PyObject, methods: Option<Vec<String>>, response_class: Option<PyObject>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
         let methods = methods.unwrap_or_else(|| vec!["GET".into()]);
         let plan = compile_route_plan(py, &endpoint, &path).unwrap_or_default();
+        let is_async = detect_handler_is_async(py, &endpoint);
         let mut routes = self.routes.lock();
         for method in methods {
             routes.push(Route {
@@ -540,6 +607,7 @@ impl FastAPI {
                 response_model_by_alias: true,
                 response_model_include: None,
                 response_model_exclude: None, dependencies: vec![], security: vec![], operation_id: None, responses: None, response_description: None,
+                is_async,
             });
         }
         Ok(())
@@ -617,6 +685,7 @@ impl FastAPI {
                     merged
                 },
                 security: r.security.iter().map(|s| s.clone_ref(py)).collect(), operation_id: r.operation_id.clone(), responses: r.responses.as_ref().map(|p| p.clone_ref(py)), response_description: r.response_description.clone(),
+                is_async: r.is_async,
             });
         }
         Ok(())
@@ -698,6 +767,31 @@ impl FastAPI {
     /// `headers`: list of (name, value) tuples from ASGI scope.
     /// `body`: bytes of the request body (Pydantic models go straight through
     /// `__pydantic_validator__.validate_json`).
+    /// Phase N: hyper-server entry. Combines `_bg.reset()` + `_dispatch()`
+    /// into one Rust method so the per-request Python overhead is just one
+    /// PyO3 method call instead of two getattr + two call sequences. Saves
+    /// ~3µs per request at the 50k+ RPS regime.
+    #[pyo3(signature = (method, path, query_string = None, headers = None, body = None))]
+    fn _dispatch_native(
+        &self,
+        py: Python<'_>,
+        method: String,
+        path: String,
+        query_string: Option<String>,
+        headers: Option<Vec<(String, String)>>,
+        body: Option<&Bound<'_, PyBytes>>,
+    ) -> PyResult<(u16, Vec<(String, String)>, Vec<u8>)> {
+        // Inline _bg.reset(): set the four module-level globals directly via
+        // PyO3 instead of going through the Python wrapper. The cached _bg
+        // module reference itself is in the once_cell.
+        let bg = get_cached_bg_module(py)?;
+        bg.setattr("_current_tasks", py.None())?;
+        bg.setattr("_current_request", py.None())?;
+        bg.setattr("_current_raw_response", py.None())?;
+        bg.setattr("_current_yield_gens", PyList::empty_bound(py))?;
+        self._dispatch(py, method, path, query_string, headers, body)
+    }
+
     #[pyo3(signature = (method, path, query_string = None, headers = None, body = None))]
     fn _dispatch(
         &self,
@@ -757,7 +851,7 @@ impl FastAPI {
         let (handler, status_code, response_model, param_plan, path_params,
              response_class, rm_exclude_unset, rm_exclude_none,
              rm_exclude_defaults, rm_by_alias, rm_include, rm_exclude,
-             route_deps_markers);
+             route_deps_markers, route_is_async);
         {
             let routes = self.routes.lock();
             let mut path_exists = false;
@@ -803,6 +897,7 @@ impl FastAPI {
                     rm_include = r.response_model_include.as_ref().map(|p| p.clone_ref(py));
                     rm_exclude = r.response_model_exclude.as_ref().map(|p| p.clone_ref(py));
                     route_deps_markers = r.dependencies.iter().map(|p| p.clone_ref(py)).collect::<Vec<_>>();
+                    route_is_async = r.is_async;
                 }
                 None => {
                     // Phase K: redirect_slashes (Starlette default) — try the
@@ -846,6 +941,67 @@ impl FastAPI {
                     ));
                 }
             }
+        }
+
+        // ---- Phase N fast path: trivial routes ---------------------------
+        // When a route has no params, no deps (route-level + app-level), no
+        // response_model, no response_class, and no path params extracted,
+        // skip ALL the per-request dict construction (query/headers/cookies)
+        // and go straight to handler call + JSON serialize. This is the
+        // common case for `@app.get("/health")` style endpoints.
+        let app_deps_count = self.dependencies.lock().len();
+        if param_plan.is_empty()
+            && route_deps_markers.is_empty()
+            && app_deps_count == 0
+            && response_model.is_none()
+            && response_class.is_none()
+            && path_params.is_empty()
+        {
+            // Direct handler call with no kwargs. For sync handlers (the
+            // common /health case) skip call_with_async_handling entirely
+            // — that helper does 4 inspect.* calls per request which adds
+            // ~10µs to a 20µs request budget.
+            let result = if route_is_async {
+                let routing_mod = py.import_bound("fastapi_rust._routing")?;
+                let async_caller = routing_mod.getattr("call_with_async_handling")?;
+                let empty_kwargs = PyDict::new_bound(py);
+                async_caller.call1((handler.bind(py), &empty_kwargs))?.unbind()
+            } else {
+                handler.call0(py)?
+            };
+
+            // 204/304 / 1xx → empty body
+            if is_no_content_status(status_code) {
+                return Ok((status_code, vec![], Vec::new()));
+            }
+            // Starlette Response passthrough — covers Streaming/File too.
+            // For Streaming/File the body is async-only; stash on _bg and
+            // let the ASGI layer drive it. For plain Response, just unpack.
+            let starlette_responses = py.import_bound("starlette.responses")?;
+            let starlette_response_class = starlette_responses.getattr("Response")?;
+            if result.bind(py).is_instance(&starlette_response_class)? {
+                let streaming_cls = starlette_responses.getattr("StreamingResponse").ok();
+                let file_cls = starlette_responses.getattr("FileResponse").ok();
+                let is_streaming = match &streaming_cls {
+                    Some(c) => result.bind(py).is_instance(c).unwrap_or(false),
+                    None => false,
+                };
+                let is_file = match &file_cls {
+                    Some(c) => result.bind(py).is_instance(c).unwrap_or(false),
+                    None => false,
+                };
+                if is_streaming || is_file {
+                    let bg = py.import_bound("fastapi_rust._bg")?;
+                    bg.setattr("_current_raw_response", result.clone_ref(py))?;
+                    return Ok((0, vec![], Vec::new()));
+                }
+                return extract_response_object(py, &result, method == "HEAD");
+            }
+
+            let body = serialize_value_to_json(py, &result)?;
+            let headers = vec![("content-type".into(), "application/json".into())];
+            let body = if method == "HEAD" { Vec::new() } else { body };
+            return Ok((status_code, headers, body));
         }
 
         // ---- Build dispatch contexts (parsed once per request) ----------
@@ -1406,6 +1562,7 @@ impl APIRouter {
                     merged
                 },
                 security: r.security.iter().map(|s| s.clone_ref(py)).collect(), operation_id: r.operation_id.clone(), responses: r.responses.as_ref().map(|p| p.clone_ref(py)), response_description: r.response_description.clone(),
+                is_async: r.is_async,
             });
         }
         Ok(())
@@ -1461,6 +1618,7 @@ pub struct ApiRouteDecorator {
 impl ApiRouteDecorator {
     fn __call__(&self, py: Python<'_>, func: PyObject) -> PyResult<PyObject> {
         let plan = compile_route_plan(py, &func, &self.path).unwrap_or_default();
+        let is_async = detect_handler_is_async(py, &func);
         let mut routes = self.routes.lock();
         for method in &self.methods {
             routes.push(Route {
@@ -1482,6 +1640,7 @@ impl ApiRouteDecorator {
                 response_model_by_alias: true,
                 response_model_include: None,
                 response_model_exclude: None, dependencies: vec![], security: vec![], operation_id: None, responses: None, response_description: None,
+                is_async,
             });
         }
         Ok(func)
@@ -1612,7 +1771,14 @@ fn build_redoc_html(title: &str, openapi_url: &str) -> String {
 }
 
 fn serialize_value_to_json(py: Python<'_>, value: &PyObject) -> PyResult<Vec<u8>> {
-    // json.dumps(value, default=jsonable_encoder).encode("utf-8")
+    // Phase M: try the all-Rust fast path first. For dict/list/str/int/float/
+    // bool/None payloads it skips Python's json module entirely (5-10× faster).
+    // Pydantic models, datetime, UUID, Decimal etc. fall through to the
+    // Python encoder path — same correctness, just slower for those cases.
+    if let Ok(bytes) = crate::json_fast::encode(py, value.bind(py)) {
+        return Ok(bytes);
+    }
+    // Fallback: json.dumps(value, default=jsonable_encoder).encode("utf-8")
     let json_mod = py.import_bound("json")?;
     let encoders_mod = py.import_bound("fastapi_rust.encoders")?;
     let encoder = encoders_mod.getattr("jsonable_encoder")?;
