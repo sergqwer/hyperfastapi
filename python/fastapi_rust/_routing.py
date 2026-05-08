@@ -957,6 +957,10 @@ def compile_route_plan(handler: Any, path_template: str, _seen: set[int] | None 
             "convert_underscores": convert_underscores,
             "embed": embed,
             "media_type": media_type,
+            # Phase H extras: surface every marker kwarg so the OpenAPI builder
+            # can read deprecated/description/title/example/examples/
+            # include_in_schema without having to know each one in advance.
+            "marker_kwargs": dict(marker_kwargs),
         }
         if model_class is not None and source in ("body", "form"):
             entry["model"] = model_class

@@ -160,6 +160,8 @@ def build_openapi_schema(app: Any) -> dict[str, Any]:
             op["summary"] = r["summary"]
         if r.get("description"):
             op["description"] = r["description"]
+        if r.get("operation_id"):
+            op["operationId"] = r["operation_id"]
         if r.get("deprecated"):
             op["deprecated"] = True
 
@@ -169,7 +171,9 @@ def build_openapi_schema(app: Any) -> dict[str, Any]:
         for p in r.get("param_plan", []) or []:
             src = p.get("source")
             if src in ("path", "query", "header", "cookie"):
-                parameters.append(_param_to_openapi(p, src))
+                param_dict = _param_to_openapi(p, src)
+                if param_dict is not None:
+                    parameters.append(param_dict)
             elif src == "body":
                 body_entries.append(p)
             elif src == "form" or src == "file":
@@ -218,12 +222,17 @@ def build_openapi_schema(app: Any) -> dict[str, Any]:
     return schema
 
 
-def _param_to_openapi(p: dict[str, Any], src: str) -> dict[str, Any]:
-    """Build an OpenAPI 3.x parameter object for a path/query/header/cookie."""
+def _param_to_openapi(p: dict[str, Any], src: str) -> dict[str, Any] | None:
+    """Build an OpenAPI 3.x parameter object for a path/query/header/cookie.
+
+    Returns ``None`` when ``include_in_schema=False`` was set on the marker —
+    callers filter these out of the parameters array.
+    """
+    mkw = p.get("marker_kwargs") or {}
+    if mkw.get("include_in_schema") is False:
+        return None
     name = p.get("alias") or p["name"]
     if src == "header":
-        # FastAPI auto-converts `_` → `-` for headers; for OpenAPI we keep the
-        # external name as-is (alias takes precedence; otherwise convert).
         if not p.get("alias") and p.get("convert_underscores", True):
             name = p["name"].replace("_", "-")
     type_kind = p.get("type", "any")
@@ -231,13 +240,24 @@ def _param_to_openapi(p: dict[str, Any], src: str) -> dict[str, Any]:
     schema_part.update(_validator_to_schema(p.get("validators") or {}))
     if p.get("default") is not None and not p.get("required", True):
         schema_part["default"] = p["default"]
-    schema_part.setdefault("title", p["name"].replace("_", " ").title())
+    if "title" in mkw and mkw["title"] is not None:
+        schema_part["title"] = mkw["title"]
+    else:
+        schema_part.setdefault("title", p["name"].replace("_", " ").title())
     out: dict[str, Any] = {
         "name": name,
         "in": src,
         "required": bool(p.get("required", True)),
         "schema": schema_part,
     }
+    if mkw.get("description"):
+        out["description"] = mkw["description"]
+    if mkw.get("deprecated"):
+        out["deprecated"] = True
+    if mkw.get("example") is not None:
+        out["example"] = mkw["example"]
+    if mkw.get("openapi_examples"):
+        out["examples"] = mkw["openapi_examples"]
     return out
 
 
@@ -313,13 +333,15 @@ def _build_request_body(body_entries: list[dict[str, Any]]) -> tuple[dict[str, A
 def _build_responses(route: dict[str, Any], capable: bool) -> tuple[dict[str, Any], dict[str, Any]]:
     """Build the responses map for a route. status_code (default 200) gets the
     success entry; if validation can occur, 422 is added with HTTPValidationError.
+    Additional ``responses={code: {model, description}}`` entries from the
+    decorator are merged.
     """
     defs: dict[str, Any] = {}
     code = route.get("status_code") or 200
-    success: dict[str, Any] = {"description": "Successful Response"}
+    rdesc = route.get("response_description") or "Successful Response"
+    success: dict[str, Any] = {"description": rdesc}
     no_body = code in (204, 304) or code < 200 or (code >= 300 and code < 400)
     if not no_body:
-        # Successful response schema from response_model (if any).
         rm = route.get("response_model")
         if rm is not None:
             top, sub_defs = _pydantic_schema(rm)
@@ -332,7 +354,33 @@ def _build_responses(route: dict[str, Any], capable: bool) -> tuple[dict[str, An
         else:
             success["content"] = {"application/json": {"schema": {}}}
     responses: dict[str, Any] = {str(code): success}
-    if capable:
+
+    # Additional ``responses=`` from the decorator: each value can have
+    # ``model`` (becomes a $ref + content/application_json) and ``description``.
+    extra = route.get("responses") or {}
+    for status_code, entry in extra.items():
+        if not isinstance(entry, dict):
+            continue
+        out_resp: dict[str, Any] = {}
+        if entry.get("description"):
+            out_resp["description"] = entry["description"]
+        else:
+            out_resp["description"] = ""
+        model = entry.get("model")
+        if model is not None:
+            try:
+                top, sub_defs = _pydantic_schema(model)
+                cname = top.get("title") or getattr(model, "__name__", "Response")
+                defs[cname] = top
+                defs.update(sub_defs)
+                out_resp["content"] = {
+                    "application/json": {"schema": {"$ref": f"#/components/schemas/{cname}"}}
+                }
+            except Exception:
+                pass
+        responses[str(status_code)] = out_resp
+
+    if capable and "422" not in responses:
         responses["422"] = {
             "description": "Validation Error",
             "content": {
