@@ -136,17 +136,37 @@ def call_with_async_handling(callable_, kwargs):
         # value — no event loop, no cross-thread submission. Saves ~50µs/req
         # vs the worker-loop path. If the coroutine yields (real await), we
         # close the partial coro and re-run on the worker loop.
-        coro = callable_(**kwargs)
+        #
+        # Phase R+: SAFETY GUARD. The fast path drives the coroutine in pure
+        # sync context. But ASGI invokes us from a thread that owns its own
+        # asyncio loop (uvicorn's main loop). Inside coro.send(None) the user
+        # may call `asyncio.create_task(...)`, `asyncio.Lock()`, etc. — those
+        # call `get_running_loop()`, which on the ASGI thread returns
+        # uvicorn's loop, NOT the persistent worker loop. The created tasks
+        # then get pinned to uvicorn's loop. A subsequent request that goes
+        # through the slow path (worker loop) tries to gather/await those
+        # tasks → "got Future attached to a different loop". To avoid the
+        # split, only take the fast path when no other loop is running on
+        # this thread; otherwise the worker-loop path is the consistent
+        # answer for every request.
+        import asyncio as _aio
         try:
-            coro.send(None)
-        except StopIteration as e:
-            return e.value
-        # Coroutine yielded — needs an event loop. Close the partial and
-        # re-create. Cost: one extra handler call, dwarfed by the loop hop.
-        try:
-            coro.close()
-        except Exception:
-            pass
+            _aio.get_running_loop()
+            on_owned_loop_thread = True
+        except RuntimeError:
+            on_owned_loop_thread = False
+        if not on_owned_loop_thread:
+            coro = callable_(**kwargs)
+            try:
+                coro.send(None)
+            except StopIteration as e:
+                return e.value
+            # Coroutine yielded — needs an event loop. Close the partial and
+            # re-create. Cost: one extra handler call, dwarfed by the loop hop.
+            try:
+                coro.close()
+            except Exception:
+                pass
         return _run_coro_blocking(callable_(**kwargs))
 
     result = callable_(**kwargs)
