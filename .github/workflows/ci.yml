@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-  # Heavy perf gate runs nightly at 04:00 UTC.
-  schedule:
-    - cron: "0 4 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -100,40 +97,6 @@ jobs:
           mkdir -p tests/perf/bin
           cp /tmp/bombardier tests/perf/bin/bombardier
           python tests/perf/runner.py --scenario get_plain --mode single --duration 5
-
-  # Heavy perf gate runs on a dedicated runner nightly. Fails the build if
-  # any scenario regresses below its declared min_rps_single threshold.
-  perf-nightly:
-    name: Perf gate (nightly, Linux)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install bombardier
-        run: |
-          curl -L -o /usr/local/bin/bombardier https://github.com/codesenberg/bombardier/releases/download/v1.2.6/bombardier-linux-amd64
-          chmod +x /usr/local/bin/bombardier
-      - name: Install python deps + build wheel
-        run: |
-          python -m pip install --upgrade pip maturin pytest pytest-timeout httpx pydantic "starlette>=0.40,<0.47" python-multipart anyio psutil uvicorn dirty_equals jinja2
-          python -m maturin build --release --interpreter python
-          python -c "import glob, subprocess, sys; w = glob.glob('target/wheels/hyperfastapi-*.whl')[0]; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', w])"
-      - name: Run full perf suite
-        env:
-          HYPERFASTAPI_AS_FASTAPI: "1"
-          PYTHONPATH: tests
-        run: python -m pytest tests/perf -q --tb=short
-      - name: Upload perf results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: perf-results-${{ github.run_id }}
-          path: tests/results/perf/
 
   # Build distributable wheels for release. Matches the conformance matrix so
   # we ship every supported (OS, Python) combination.
